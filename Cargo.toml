@@ -1,9 +1,9 @@
 [package]
 name = "codex-navigator"
-version = "1.1.2"
+version = "1.2.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Read-only local terminal sidecar for Codex sessions"
+description = "Read-only local terminal and web sidecar for Codex sessions"
 license = "MIT"
 default-run = "codex-nav"
 
@@ -13,17 +13,21 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
+axum = "0.8"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 directories = "6"
+getrandom = "0.4"
+futures-util = "0.3"
 memchr = "2"
 notify = "8"
 ratatui = "0.29"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "signal", "time", "sync", "macros"] }
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 

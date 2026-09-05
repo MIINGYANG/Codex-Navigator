@@ -1,0 +1,14 @@
+{
+  "name": "codex-navigator-web-dev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test web/*.test.mjs",
+    "lint": "eslint web/ scripts/web_qa.mjs",
+    "format:check": "prettier --check web/ scripts/web_qa.mjs eslint.config.mjs package.json"
+  },
+  "devDependencies": {
+    "eslint": "10.10.0",
+    "prettier": "3.8.1"
+  }
+}

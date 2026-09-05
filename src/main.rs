@@ -77,6 +77,10 @@ fn scan(
 
 fn run() -> Result<()> {
     let cli = Cli::parse();
+    anyhow::ensure!(
+        !(cli.web && cli.command.is_some()),
+        "--web cannot be combined with doctor"
+    );
     let mut config = Config::load()?;
     config.watch &= !cli.no_watch;
     let home = discovery::resolve_codex_home()?;
@@ -86,9 +90,22 @@ fn run() -> Result<()> {
     if matches!(cli.command, Some(Command::Doctor)) {
         return doctor(&home, &cwd, &config);
     }
+    if cli.web {
+        return codex_navigator::web::run(
+            home,
+            cwd,
+            config,
+            codex_navigator::web::WebOptions {
+                port: cli.port,
+                no_open: cli.no_open,
+                all: cli.all,
+                session: cli.session,
+            },
+        );
+    }
     anyhow::ensure!(
         io::stdin().is_terminal() && io::stdout().is_terminal(),
-        "An interactive terminal is required. Try codex-nav doctor or --help."
+        "An interactive terminal is required. Try codex-nav --web, doctor or --help."
     );
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {

@@ -102,3 +102,16 @@ cargo install --path . --locked
 - `cargo test`：132 tests 全部通过。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、release build 和 diff 检查通过。
 - `python3 -B scripts/terminal_qa.py target/release/codex-nav`：6 组通过，新增 ✓ !1 / … !1 / ⊘ / ✕、正文 TURN STATUS、f 最终回复、宽窄切换和免责声明验收，原有主会话 Picker / gG / 退出恢复全部保留。合成源文件 SHA-256 不变。
 - 本机只读抽样 12 份 rollout，确认 task_complete / turn_aborted 的实际结构，未输出内容。Web 目前不支持直接查看，仅记录核心可复用与缺少 HTTP/API/前端的边界，未创建服务或网络监听。
+
+## v1.2.0 — 2026-09-06
+
+- B「专注阅读」成为正式 Web，资源内嵌 binary；默认 TUI 不变，只有 --web 才启动 loopback HTTP。
+- `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo test`、`cargo build --release --locked` 通过。157 tests，包含 11 个 Web 单测、13 个真实二进制 HTTP 集成；Linux x86_64 release 约 3.9 MiB，版本返回 1.2.0。
+- `npm run format:check`、`npm run lint`、`npm test` 通过：Prettier / ESLint 零错误，18 个纯状态/请求代次/活动窗口/安全 Markdown 测试通过。Node/npm 仅开发时需要。
+- `node scripts/web_qa.mjs target/release/codex-nav` 与追加 `--no-watch` 均通过：实际浏览器 1280×793 / 390×793，共四组。覆盖默认主会话、子代理隐藏、会话与 Prompt 搜索、105 轮分页、活动 64 条窗口与前后组、整轮复制及剪贴板拒绝降级、f/g/G、帮助、临时 503 自动恢复、历史新增独立计数、DOM/展开分页/滚动位置保持、无 final 提示、无远程资源与恶意 HTML/链接不执行。无监控时不自动读取，手动刷新能取回异步更新。
+- 截图自审修正长 Prompt 作为会话标题占满侧栏的问题，标题取首行并限长，桌面目录独立滚动；保留 B 的轻目录、宽正文和最终回复书签。截图仅包含合成数据。
+- 安全测试先复现公开顶层导航被错误拦截，再将公开 shell 与受保护 API 分层；API 的跨站、Host/Origin、缺失/重复/错误令牌、方法与正文限制不放宽。覆盖任意路径/符号链接外跳、显式 CLI 授权、两会话缓存换代、流式大响应许可、慢连接期限及有未完成请求时的 Ctrl+C。
+- `python3 scripts/terminal_qa.py target/release/codex-nav` 六组全部通过。初次暴露既有 harness 两个竞争：同尺寸重排误清空模拟屏幕，实际重排后立即发键竞争 SIGWINCH/TTY 就绪。修正为同尺寸保持屏幕、等待真实帧结束确认；原内容断言不变。连续五次完整复验及主线程最终复验通过，另验证搜索输入可见光标的重排确认；未修改 Rust/TUI 业务源码。
+- 再次只读抽样本机 12 份会话头部，确认 cli/subagent、消息镜像与 final_answer 实际形态。正式浏览器列出 14 个真实 MAIN；主会话 API 加载成功。显式打开一个静态历史 SUBAGENT（12 轮），SHA-256 前后不变，未输出 Prompt/回复。所有 Web/终端合成 fixture 均核对预期字节不变。
+
+边界：仅本机访问，不支持公网/局域网共享；Markdown 为安全子集，不加载图片附件，复杂表格/公式可能保持原始文本。沿用正文滚动预算与省略机制，不能恢复被淘汰历史全文。每进程最多两个打开会话、20,000 已登记会话，API 目录 100 / 活动 8 条每页，浏览器活动窗口 64 条；预算不等于总 RSS。Windows/macOS 与其他浏览器未在本机验收。

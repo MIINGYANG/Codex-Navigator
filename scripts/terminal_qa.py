@@ -119,11 +119,25 @@ class Navigator:
         self.output = bytearray()
 
     def resize(self, width, height):
+        running = hasattr(self, "proc")
+        if running and (width, height) == (self.screen.width, self.screen.height):
+            return
+        if running:
+            # Drain the previous frame before changing the decoder's geometry.
+            self.pump()
+            previous_frame = self.screen.frames
         if hasattr(self, "screen"):
             self.screen.resize(width, height)
         fcntl.ioctl(self.slave, termios.TIOCSWINSZ, struct.pack("HHHH", height, width, 0, 0))
-        if hasattr(self, "proc"):
+        if running:
             self.proc.send_signal(signal.SIGWINCH)
+            # A resize and a key in the same mio poll batch can lose the TTY
+            # readiness edge in crossterm 0.28. Wait for the redraw acknowledgement
+            # before sending the next user action, rather than adding a blind sleep.
+            deadline = time.monotonic() + 4
+            while self.screen.frames == previous_frame and time.monotonic() < deadline:
+                self.pump()
+            assert self.screen.frames > previous_frame, "terminal resize was not rendered"
 
     def pump(self, duration=0.1):
         deadline = time.monotonic() + duration
@@ -173,9 +187,12 @@ class Screen:
     def __init__(self, width, height):
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.pending = ""
+        self.frames = 0
         self.resize(width, height)
 
     def resize(self, width, height):
+        if (width, height) == (getattr(self, "width", None), getattr(self, "height", None)):
+            return
         self.width, self.height = width, height
         self.rows = [[" "] * width for _ in range(height)]
         self.x = self.y = 0
@@ -213,6 +230,10 @@ class Screen:
                         self.rows = [[" "] * self.width for _ in range(self.height)]
                     elif code == "K" and self.y < self.height:
                         for x in range(self.x, self.width): self.rows[self.y][x] = " "
+                    elif code in ("h", "l") and args == "?25":
+                        # ratatui finalizes frames by restoring cursor visibility;
+                        # search input uses a visible cursor, reading uses a hidden one.
+                        self.frames += 1
                     i += len(match.group())
                     continue
                 i += 2
@@ -234,6 +255,16 @@ def main():
     parser.add_argument("--real-session", type=Path)
     args = parser.parse_args()
     binary = args.binary.resolve()
+    # The decoder must preserve same-size contents and acknowledge fragmented frames.
+    screen = Screen(20, 4)
+    screen.feed(b"USER\x1b[?2")
+    assert screen.frames == 0
+    screen.feed(b"5l")
+    assert screen.frames == 1
+    screen.feed(b"\x1b[?25h")
+    assert screen.frames == 2
+    screen.resize(20, 4)
+    assert "USER" in screen.text()
     with tempfile.TemporaryDirectory(prefix="codex-nav-terminal-qa-") as directory:
         root = Path(directory)
         session = root / "rollout-synthetic.jsonl"

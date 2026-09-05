@@ -20,6 +20,15 @@ pub struct Cli {
     /// Disable automatic updates; use r to refresh manually.
     #[arg(long)]
     pub no_watch: bool,
+    /// Open the local read-only web reader instead of the terminal interface.
+    #[arg(long)]
+    pub web: bool,
+    /// Loopback web port; use 0 to choose an available port automatically.
+    #[arg(long, requires = "web", default_value_t = 8765)]
+    pub port: u16,
+    /// Print the local web URL without opening a browser.
+    #[arg(long, requires = "web")]
+    pub no_open: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }

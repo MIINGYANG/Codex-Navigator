@@ -1,0 +1,710 @@
+use serde_json::{json, Value};
+use std::{
+    collections::BTreeMap,
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Read, Write},
+    net::TcpStream,
+    path::{Path, PathBuf},
+    process::{Child, Command, Stdio},
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+use tempfile::TempDir;
+
+const DEADLINE: Duration = Duration::from_secs(10);
+
+struct Server {
+    child: Child,
+    root: TempDir,
+    address: String,
+    token: String,
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+struct Response {
+    status: u16,
+    headers: BTreeMap<String, String>,
+    body: Vec<u8>,
+}
+
+impl Response {
+    fn json(&self) -> Value {
+        assert_eq!(self.status, 200, "{}", String::from_utf8_lossy(&self.body));
+        serde_json::from_slice(&self.body).unwrap()
+    }
+
+    fn text(&self) -> String {
+        String::from_utf8(self.body.clone()).unwrap()
+    }
+}
+
+fn lines(records: &[Value]) -> String {
+    records.iter().map(|record| format!("{record}\n")).collect()
+}
+
+fn user(text: &str) -> Value {
+    json!({"type":"event_msg","payload":{"type":"user_message","message":text}})
+}
+
+fn meta(id: &str) -> Value {
+    json!({"type":"session_meta","payload":{"id":id,"cwd":"/synthetic/project","source":"cli"}})
+}
+
+fn fixture(root: &Path, id: &str, records: &[Value]) -> PathBuf {
+    let directory = root.join("codex/sessions/2026/09/06");
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join(format!("rollout-{id}.jsonl"));
+    fs::write(&path, lines(records)).unwrap();
+    path
+}
+
+impl Server {
+    fn start(root: TempDir, arguments: &[&str]) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_codex-nav"))
+            .args(["--web", "--port", "0", "--no-open", "--all"])
+            .args(arguments)
+            .env("CODEX_HOME", root.path().join("codex"))
+            .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let (sender, receiver) = mpsc::channel();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(start) = line.find("http://127.0.0.1:") {
+                    let url = line[start..].split_whitespace().next().unwrap();
+                    if sender.send(url.to_string()).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let url = match receiver.recv_timeout(DEADLINE) {
+            Ok(url) => url,
+            Err(error) => {
+                let state = child.try_wait().unwrap();
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("web server did not print startup URL: {error}; exit={state:?}");
+            }
+        };
+        let (address, token) = url
+            .strip_prefix("http://")
+            .unwrap()
+            .split_once("/#token=")
+            .unwrap();
+        assert_eq!(token.len(), 64);
+        assert!(token.bytes().all(|byte| byte.is_ascii_hexdigit()));
+        Self {
+            child,
+            root,
+            address: address.to_string(),
+            token: token.to_string(),
+        }
+    }
+
+    fn request(&self, method: &str, path: &str, headers: &[(&str, &str)]) -> Response {
+        let mut stream = TcpStream::connect(&self.address).unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        stream.set_write_timeout(Some(DEADLINE)).unwrap();
+        let host = headers
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("host"))
+            .map_or(self.address.as_str(), |(_, value)| *value);
+        let mut request =
+            format!("{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n");
+        for (name, value) in headers {
+            if !name.eq_ignore_ascii_case("host") {
+                request.push_str(&format!("{name}: {value}\r\n"));
+            }
+        }
+        request.push_str("\r\n");
+        stream.write_all(request.as_bytes()).unwrap();
+        let mut bytes = Vec::new();
+        stream.read_to_end(&mut bytes).unwrap();
+        let split = bytes
+            .windows(4)
+            .position(|part| part == b"\r\n\r\n")
+            .unwrap();
+        let header_text = std::str::from_utf8(&bytes[..split]).unwrap();
+        let mut header_lines = header_text.split("\r\n");
+        let status = header_lines
+            .next()
+            .unwrap()
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .parse()
+            .unwrap();
+        let headers: BTreeMap<_, _> = header_lines
+            .filter_map(|line| line.split_once(':'))
+            .map(|(name, value)| (name.to_ascii_lowercase(), value.trim().to_string()))
+            .collect();
+        let mut body = bytes[split + 4..].to_vec();
+        if headers
+            .get("transfer-encoding")
+            .is_some_and(|value| value == "chunked")
+        {
+            let mut remaining = body.as_slice();
+            let mut decoded = Vec::new();
+            loop {
+                let end = remaining
+                    .windows(2)
+                    .position(|part| part == b"\r\n")
+                    .unwrap();
+                let size = usize::from_str_radix(
+                    std::str::from_utf8(&remaining[..end])
+                        .unwrap()
+                        .split(';')
+                        .next()
+                        .unwrap(),
+                    16,
+                )
+                .unwrap();
+                if size == 0 {
+                    break;
+                }
+                remaining = &remaining[end + 2..];
+                decoded.extend_from_slice(&remaining[..size]);
+                remaining = &remaining[size + 2..];
+            }
+            body = decoded;
+        }
+        Response {
+            status,
+            headers,
+            body,
+        }
+    }
+
+    fn get(&self, path: &str) -> Response {
+        self.request("GET", path, &[("X-Codex-Nav-Token", &self.token)])
+    }
+
+    fn wait(&self, path: &str, ready: impl Fn(&Value) -> bool) -> Value {
+        let deadline = Instant::now() + DEADLINE;
+        loop {
+            let value = self.get(path).json();
+            if ready(&value) {
+                return value;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "API did not reach expected state: {path}: {value}"
+            );
+            thread::sleep(Duration::from_millis(25));
+        }
+    }
+
+    fn sessions(&self) -> Value {
+        self.wait("/api/sessions?all=1", |value| value["loading"] == false)
+    }
+
+    fn key(&self, id: &str) -> String {
+        self.sessions()["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["id"] == id)
+            .unwrap()["key"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    }
+
+    fn loaded(&self, key: &str, count: usize) -> Value {
+        self.wait(&format!("/api/session/{key}"), |value| {
+            value["loading"] == false && value["turn_count"] == count
+        })
+    }
+}
+
+#[test]
+fn web_static_assets_and_security_headers_expose_no_session_data() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(
+        root.path(),
+        "main",
+        &[meta("main"), user("private-prompt-marker")],
+    );
+    let original = fs::read(&path).unwrap();
+    let server = Server::start(root, &[]);
+    for path in ["/", "/app.js", "/app.css"] {
+        let response = server.request("GET", path, &[]);
+        assert_eq!(response.status, 200, "{path}");
+        assert!(!response.text().contains("private-prompt-marker"));
+        assert!(!response.text().contains(&server.token));
+        assert_eq!(response.headers["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers["referrer-policy"], "no-referrer");
+        assert!(!response.headers.contains_key("access-control-allow-origin"));
+        assert!(response.headers["cache-control"].contains("no-store"));
+    }
+    let home = server.request("GET", "/", &[]);
+    let csp = &home.headers["content-security-policy"];
+    for rule in [
+        "default-src 'none'",
+        "frame-ancestors 'none'",
+        "connect-src 'self'",
+    ] {
+        assert!(csp.contains(rule), "missing CSP rule: {rule}");
+    }
+    let info = server.get("/api/info").json();
+    assert_eq!(info["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(info["watch"], true);
+    assert_eq!(info["default_all"], true);
+    assert!(info["initial_session"].is_null());
+    assert_eq!(fs::read(path).unwrap(), original);
+    assert!(!server.root.path().join("config").exists());
+}
+
+#[test]
+fn web_cross_site_top_level_navigation_serves_public_shell_not_api_data() {
+    let root = TempDir::new().unwrap();
+    fixture(
+        root.path(),
+        "main",
+        &[meta("main"), user("private-navigation-marker")],
+    );
+    let server = Server::start(root, &[]);
+    let mut headers = vec![
+        ("Sec-Fetch-Site", "cross-site"),
+        ("Sec-Fetch-Mode", "navigate"),
+        ("Sec-Fetch-Dest", "document"),
+    ];
+    let response = server.request("GET", "/", &headers);
+    assert_eq!(response.status, 200);
+    assert!(!response.text().contains("private-navigation-marker"));
+    assert!(!response.text().contains(&server.token));
+    headers.push(("X-Codex-Nav-Token", server.token.as_str()));
+    assert_eq!(server.request("GET", "/api/info", &headers).status, 403);
+    headers.push(("Origin", "https://evil.invalid"));
+    assert_eq!(server.request("GET", "/", &headers).status, 403);
+}
+
+#[test]
+fn web_api_rejects_unauthenticated_cross_origin_rebinding_and_mutations() {
+    let root = TempDir::new().unwrap();
+    fixture(
+        root.path(),
+        "main",
+        &[meta("main"), user("private-prompt-marker")],
+    );
+    let server = Server::start(root, &[]);
+    for headers in [
+        vec![],
+        vec![("X-Codex-Nav-Token", "incorrect")],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Origin", "https://evil.invalid"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Origin", "null"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Host", "evil.invalid"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Sec-Fetch-Site", "cross-site"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("X-Codex-Nav-Token", server.token.as_str()),
+        ],
+    ] {
+        let response = server.request("GET", "/api/sessions?all=1", &headers);
+        assert_eq!(response.status, 403, "headers={headers:?}");
+        assert!(!response.text().contains("private-prompt-marker"));
+        assert!(!response.headers.contains_key("access-control-allow-origin"));
+    }
+    for method in ["POST", "PUT", "DELETE", "OPTIONS"] {
+        assert_eq!(
+            server
+                .request(method, "/api/info", &[("X-Codex-Nav-Token", &server.token)])
+                .status,
+            405
+        );
+    }
+    assert_eq!(
+        server
+            .request("GET", &format!("/api/info?token={}", server.token), &[],)
+            .status,
+        403
+    );
+    assert_eq!(
+        server
+            .request(
+                "GET",
+                "/api/info",
+                &[
+                    ("X-Codex-Nav-Token", &server.token),
+                    ("Content-Length", "1"),
+                ],
+            )
+            .status,
+        400
+    );
+    let origin = format!("http://{}", server.address);
+    assert_eq!(
+        server
+            .request(
+                "GET",
+                "/api/info",
+                &[("X-Codex-Nav-Token", &server.token), ("Origin", &origin)]
+            )
+            .status,
+        200
+    );
+}
+
+#[test]
+fn web_discovery_lists_only_main_and_rejects_browser_supplied_paths() {
+    let root = TempDir::new().unwrap();
+    let main_path = fixture(root.path(), "main", &[meta("main"), user("main prompt")]);
+    fixture(
+        root.path(),
+        "child",
+        &[
+            json!({"type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"main","agent_nickname":"test"}}}}}),
+            user("child prompt"),
+        ],
+    );
+    fixture(
+        root.path(),
+        "unknown",
+        &[
+            json!({"type":"session_meta","payload":{"id":"unknown","source":"future-unknown-source"}}),
+            user("unknown prompt"),
+        ],
+    );
+    fs::write(root.path().join("private.txt"), "arbitrary-private-marker").unwrap();
+    let server = Server::start(root, &[]);
+    let sessions = server.sessions();
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(sessions["sessions"][0]["id"], "main");
+    let key = sessions["sessions"][0]["key"].as_str().unwrap();
+    assert!(!key.contains('/'));
+    assert_ne!(key, main_path.to_string_lossy());
+    for path in [
+        "/api/session/unknown-key",
+        "/api/session/..%2F..%2Fprivate.txt",
+        "/api/session/%2Fetc%2Fpasswd",
+        "/..%2Fprivate.txt",
+        "/Cargo.toml",
+    ] {
+        let response = server.get(path);
+        assert!(response.status >= 400, "path={path}");
+        assert!(!response.text().contains("arbitrary-private-marker"));
+    }
+}
+
+#[test]
+fn web_explicit_cli_session_is_registered_without_redirecting_to_parent() {
+    let root = TempDir::new().unwrap();
+    fixture(root.path(), "main", &[meta("main"), user("parent prompt")]);
+    let child = fixture(
+        root.path(),
+        "child",
+        &[
+            json!({"type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"main"}}}}}),
+            user("child-only prompt"),
+        ],
+    );
+    let server = Server::start(root, &["--session", child.to_str().unwrap()]);
+    let info = server.get("/api/info").json();
+    let key = info["initial_session"].as_str().unwrap();
+    let session = server.loaded(key, 1);
+    assert_eq!(session["meta"]["id"], "child");
+    let turn = server.get(&format!("/api/session/{key}/turn/0")).json();
+    assert_eq!(turn["turn"]["prompt"]["text"], "child-only prompt");
+    assert_eq!(server.sessions()["sessions"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn web_normalized_turns_separate_lifecycle_warnings_final_and_paginate() {
+    let root = TempDir::new().unwrap();
+    let mut records = vec![meta("main"), user("修复 authentication regression")];
+    for index in 0..12 {
+        records.push(json!({"type":"response_item","payload":{"type":"function_call_output","call_id":format!("tool-{index}"),"output":{"exit_code":if index == 0 {1} else {0},"output":format!("activity {index}")}}}));
+    }
+    records.push(json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"# 最终回复\n保留 <script>synthetic()</script> 作为文本。"}]}}));
+    records.push(json!({"type":"event_msg","payload":{"type":"task_complete"}}));
+    records.push(user("第二轮等待操作"));
+    records.push(json!({"type":"event_msg","payload":{"type":"turn_aborted"}}));
+    let path = fixture(root.path(), "main", &records);
+    let original = fs::read(&path).unwrap();
+    let server = Server::start(root, &[]);
+    let key = server.key("main");
+    server.loaded(&key, 2);
+    let route = format!("/api/session/{key}");
+    let turns = server.get(&format!("{route}/turns?limit=1")).json();
+    assert_eq!(turns["total"], 2);
+    assert_eq!(turns["turns"].as_array().unwrap().len(), 1);
+    assert_eq!(turns["turns"][0]["status"], "completed");
+    assert_eq!(turns["turns"][0]["errors"], 1);
+    assert_eq!(turns["turns"][0]["has_final"], true);
+    let second = server
+        .get(&format!("{route}/turns?offset=1&limit=1"))
+        .json();
+    assert_eq!(second["turns"][0]["index"], 1);
+    assert_eq!(second["turns"][0]["status"], "interrupted");
+    let search = server
+        .get(&format!("{route}/turns?q=authentication"))
+        .json();
+    assert_eq!(search["total"], 1);
+    assert_eq!(search["turns"][0]["index"], 0);
+    let turn = server.get(&format!("{route}/turn/0?limit=999")).json();
+    assert_eq!(turn["items"].as_array().unwrap().len(), 8);
+    assert!(turn["items_total"].as_u64().unwrap() > 8);
+    assert_eq!(turn["next_offset"], 8);
+    assert!(turn["final_answer"]["index"].as_u64().unwrap() >= 8);
+    assert!(turn["final_answer"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("最终回复"));
+    assert_eq!(turn["turn"]["activity"]["errors"], 1);
+    let remaining = server.get(&format!("{route}/turn/0?offset=8")).json();
+    assert_eq!(remaining["items"][0]["index"], 8);
+    assert!(remaining["next_offset"].is_null());
+    let no_final = server.get(&format!("{route}/turn/1")).json();
+    assert!(no_final["final_answer"].is_null());
+    let text = server.get(&format!("{route}/turn/0/text"));
+    assert_eq!(text.status, 200);
+    assert!(text.text().contains("FINAL ANSWER"));
+    assert!(text.text().contains("activity 11"));
+    for suffix in [
+        "turns?offset=bad",
+        "turns?limit=-1",
+        "turn/0?offset=bad",
+        "turn/0?limit=-1",
+    ] {
+        assert_eq!(server.get(&format!("{route}/{suffix}")).status, 400);
+    }
+    assert_eq!(server.get(&format!("{route}/turn/99")).status, 404);
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+fn web_watch_appends_partial_records_and_replacement_changes_generation() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(root.path(), "main", &[meta("main"), user("first")]);
+    let server = Server::start(root, &[]);
+    let key = server.key("main");
+    let initial = server.loaded(&key, 1);
+    let record = lines(&[user("中文 second")]);
+    let split = record.find('中').unwrap() + 1;
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&record.as_bytes()[..split])
+        .unwrap();
+    thread::sleep(Duration::from_millis(200));
+    let partial = server.get(&format!("/api/session/{key}")).json();
+    assert_eq!(partial["turn_count"], 1);
+    assert_eq!(partial["stats"]["malformed_records"], 0);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(&record.as_bytes()[split..])
+        .unwrap();
+    let appended = server.loaded(&key, 2);
+    assert_eq!(appended["generation"], initial["generation"]);
+    assert!(appended["revision"].as_u64().unwrap() > initial["revision"].as_u64().unwrap());
+    let replacement = path.with_extension("replacement");
+    fs::write(&replacement, lines(&[meta("main"), user("replacement")])).unwrap();
+    fs::rename(&replacement, &path).unwrap();
+    let changed = server.wait(&format!("/api/session/{key}"), |value| {
+        value["loading"] == false
+            && value["turn_count"] == 1
+            && value["generation"] != initial["generation"]
+    });
+    assert_ne!(changed["generation"], initial["generation"]);
+    let turn = server.get(&format!("/api/session/{key}/turn/0")).json();
+    assert_eq!(turn["turn"]["prompt"]["text"], "replacement");
+    assert_eq!(
+        fs::read_to_string(path).unwrap(),
+        lines(&[meta("main"), user("replacement")])
+    );
+}
+
+#[test]
+fn web_no_watch_requires_manual_refresh_and_remains_read_only() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(root.path(), "main", &[meta("main"), user("first")]);
+    let server = Server::start(root, &["--no-watch"]);
+    let key = server.key("main");
+    assert_eq!(server.loaded(&key, 1)["watch"], false);
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(lines(&[user("second")]).as_bytes())
+        .unwrap();
+    let expected = fs::read(&path).unwrap();
+    thread::sleep(Duration::from_millis(350));
+    assert_eq!(
+        server.get(&format!("/api/session/{key}")).json()["turn_count"],
+        1
+    );
+    assert_eq!(
+        server.get(&format!("/api/session/{key}?refresh=1")).status,
+        200
+    );
+    server.loaded(&key, 2);
+    assert_eq!(fs::read(path).unwrap(), expected);
+    assert!(!server.root.path().join("config").exists());
+}
+
+#[test]
+fn web_empty_installation_is_a_valid_picker_not_an_error() {
+    let server = Server::start(TempDir::new().unwrap(), &[]);
+    let sessions = server.sessions();
+    assert_eq!(sessions["sessions"], json!([]));
+    assert!(sessions["error"].is_null());
+    assert!(!server.root.path().join("codex").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn web_discovery_rejects_symlink_escape_but_cli_may_explicitly_open_external_file() {
+    use std::os::unix::fs::symlink;
+
+    let root = TempDir::new().unwrap();
+    let main_path = fixture(root.path(), "main", &[meta("main"), user("main prompt")]);
+    let external = root.path().join("external.jsonl");
+    let private = lines(&[meta("outside"), user("outside-private-marker")]);
+    fs::write(&external, &private).unwrap();
+    symlink(
+        &external,
+        main_path.parent().unwrap().join("rollout-escape.jsonl"),
+    )
+    .unwrap();
+    let server = Server::start(root, &[]);
+    let sessions = server.sessions();
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 1);
+    assert_eq!(sessions["sessions"][0]["id"], "main");
+    assert!(!sessions.to_string().contains("outside-private-marker"));
+    assert_eq!(fs::read_to_string(&external).unwrap(), private);
+
+    let explicit_root = TempDir::new().unwrap();
+    let explicit = Server::start(explicit_root, &["--session", external.to_str().unwrap()]);
+    let info = explicit.get("/api/info").json();
+    let key = info["initial_session"].as_str().unwrap();
+    assert_eq!(explicit.loaded(key, 1)["meta"]["id"], "outside");
+    assert_eq!(
+        explicit.get(&format!("/api/session/{key}/turn/0")).json()["turn"]["prompt"]["text"],
+        "outside-private-marker"
+    );
+    assert_eq!(fs::read_to_string(external).unwrap(), private);
+}
+
+#[test]
+fn web_turn_directory_is_bounded_and_refresh_discovers_new_main_sessions() {
+    let root = TempDir::new().unwrap();
+    let mut records = vec![meta("main")];
+    records.extend((0..120).map(|index| user(&format!("unique prompt {index}"))));
+    fixture(root.path(), "main", &records);
+    let server = Server::start(root, &[]);
+    let key = server.key("main");
+    server.loaded(&key, 120);
+    let first = server
+        .get(&format!("/api/session/{key}/turns?limit=9999"))
+        .json();
+    assert_eq!(first["total"], 120);
+    assert_eq!(first["turns"].as_array().unwrap().len(), 100);
+    let last = server
+        .get(&format!("/api/session/{key}/turns?offset=100&limit=100"))
+        .json();
+    assert_eq!(last["turns"].as_array().unwrap().len(), 20);
+    assert_eq!(last["turns"][0]["index"], 100);
+    assert_eq!(
+        server
+            .get(&format!("/api/session/{key}/turns?offset=999"))
+            .json()["turns"],
+        json!([])
+    );
+    fixture(
+        server.root.path(),
+        "new-main",
+        &[meta("new-main"), user("newly discovered")],
+    );
+    assert_eq!(server.get("/api/sessions?all=1&refresh=1").status, 200);
+    server.wait("/api/sessions?all=1", |value| {
+        value["loading"] == false
+            && value["sessions"]
+                .as_array()
+                .is_some_and(|sessions| sessions.len() == 2)
+    });
+}
+
+#[test]
+fn web_cache_eviction_reloads_with_new_generation_and_correct_session() {
+    let root = TempDir::new().unwrap();
+    for id in ["first", "second", "third"] {
+        fixture(root.path(), id, &[meta(id), user(&format!("{id} prompt"))]);
+    }
+    let server = Server::start(root, &[]);
+    let first_key = server.key("first");
+    let initial = server.loaded(&first_key, 1);
+    for id in ["second", "third"] {
+        let key = server.key(id);
+        assert_eq!(server.loaded(&key, 1)["meta"]["id"], id);
+    }
+    let reopened = server.loaded(&first_key, 1);
+    assert_ne!(reopened["generation"], initial["generation"]);
+    assert_eq!(reopened["meta"]["id"], "first");
+    assert_eq!(
+        server
+            .get(&format!("/api/session/{first_key}/turn/0"))
+            .json()["turn"]["prompt"]["text"],
+        "first prompt"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn web_ctrl_c_gracefully_stops_server_and_session_worker() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(root.path(), "main", &[meta("main"), user("first")]);
+    let original = fs::read(&path).unwrap();
+    let mut server = Server::start(root, &[]);
+    let key = server.key("main");
+    server.loaded(&key, 1);
+    // An incomplete HTTP header must not keep graceful shutdown waiting indefinitely.
+    let mut stalled = TcpStream::connect(&server.address).unwrap();
+    stalled.write_all(b"GET / HTTP/1.1\r\nHost:").unwrap();
+    thread::sleep(Duration::from_millis(100));
+    assert!(Command::new("kill")
+        .args(["-INT", &server.child.id().to_string()])
+        .status()
+        .unwrap()
+        .success());
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = server.child.try_wait().unwrap() {
+            assert!(status.success(), "Ctrl+C did not exit gracefully: {status}");
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "Ctrl+C left server or worker running"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(TcpStream::connect(&server.address).is_err());
+    assert_eq!(fs::read(path).unwrap(), original);
+}

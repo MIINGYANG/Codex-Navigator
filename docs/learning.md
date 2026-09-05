@@ -39,3 +39,15 @@
 **Key insight:** 设计预选应提供相同核心操作下的不同信息布局，而非同一模板换色。用合成数据制作独立 HTML，让用户实际体验会话入口、时间线、最终回复和手机排版；明确预览与正式数据接入的边界，选择确认前不推进后端。
 **Details / snippet:** A 三栏工作台、B 长文阅读、C 深色双区控制台，统一 gallery 切换。六组桌面/手机浏览器交互各 18 断言通过；原有 132 tests 与 release 检查通过。正式版本保持 v1.1.2，用户尚未选定 Web 方案。
 **Tags:** #design #web #prototype #interaction #verification
+
+## 2026-09-06 — 将选定的阅读设计接到真实只读状态
+**Question:** 如何将 B 阅读样稿升级为安全、实时、不中断历史阅读的正式 --web？
+**Key insight:** 公开页面与受保护会话 API 必须分层：HTML 不含秘密，应允许合法导航；数据请求仍需令牌与来源校验。会话 revision 只提示变化，当前轮 turn revision 才决定正文是否重绘，失败资源也必须单独重试；不能因元数据成功而把旧正文当作已同步。
+**Details / snippet:** v1.2.0：157 Rust tests、18 前端 tests、四组宽窄/监控浏览器验收、fmt/clippy/Prettier/ESLint/release 通过。活动窗口最多64条并保留前后组，其他轮更新不清空历史 DOM。目录 G 使用新 metadata 而非滞后分页；“距最新”与“新增”分别表示历史位置和新到达事件。真实主会话加载与历史文件 hash 核对通过。
+**Tags:** #web #readonly #security #state #pagination #verification
+
+## 2026-09-06 — 终端验收必须等待重排完成
+**Question:** 为什么未修改 TUI 业务代码，却在重排后的 g/f 验收出现不稳定失败？
+**Key insight:** 模拟终端不能在同尺寸重排时自行清空屏幕，因为真实应用可能只增量重绘。重排信号与紧随其后的按键也不应被验收脚本塞入同一事件批次；等待实际帧结束比任意延时可靠，并保留原功能断言。
+**Details / snippet:** scripts/terminal_qa.py 加入分片光标帧结束与同尺寸保留断言，重排完成后才继续发键；六组终端集成连续五次及最终复验通过，不改变 Rust/TUI 逻辑。
+**Tags:** #testing #terminal #resize #race #verification

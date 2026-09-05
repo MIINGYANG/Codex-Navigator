@@ -1,6 +1,6 @@
 # Codex Navigator
 
-Codex CLI 的本地只读终端 Sidecar。快速定位历史 Prompt，浏览回复与命令，并实时跟随正在增长的会话。独立社区工具，与 OpenAI 官方项目无隶属关系。
+Codex CLI 的本地只读 Sidecar。通过终端或网页快速定位历史 Prompt，浏览回复与命令，并实时跟随正在增长的会话。独立社区工具，与 OpenAI 官方项目无隶属关系。
 
 ```text
  Codex Navigator · WATCHING · MAIN · ~/project · 12 turns
@@ -23,6 +23,7 @@ Codex CLI 的本地只读终端 Sidecar。快速定位历史 Prompt，浏览回�
 - 中文、大小写无关 substring 与英文 fuzzy 搜索；同分时优先较新的 Turn。
 - 后台流式加载，实时增量更新；查看历史时保留选择，显示 `+N new turns`。
 - 宽终端双栏；不足 100 列时按 Tab 切换单栏。
+- `--web` 启动 B「专注阅读」本机网页，主会话入口、轻量目录、宽正文与最终回复书签；资源内嵌，无需 Node 或网络服务。
 - 支持复制、Viewer 滚动、帮助、手动刷新和诊断。
 - 容忍格式变动、坏行、BOM、半行、超大图片记录和文件替换。
 
@@ -98,12 +99,14 @@ codex-nav --session /path/to/rollout.jsonl
 codex-nav --cwd /path/to/project
 codex-nav --all
 codex-nav --no-watch
+codex-nav --web
+codex-nav --web --port 8765 --no-open
 codex-nav doctor
 codex-nav --help
 codex-nav --version
 ```
 
-`--no-watch` 禁用自动更新，`r` 仍可增量读取。TUI 需要交互终端；管道环境请使用 `doctor` 或 `--help`。
+`--no-watch` 禁用自动更新，`r` 仍可增量读取。TUI 需要交互终端；Web 模式、`doctor` 和 `--help` 不需要。
 
 可选配置路径：Linux `~/.config/codex-nav/config.toml`（尊重 XDG_CONFIG_HOME）；macOS `~/Library/Application Support/codex-nav/config.toml`；Windows 平台配置目录下 `codex-nav/config.toml`。应用不会自动创建配置。
 
@@ -155,12 +158,22 @@ cargo fmt --check
 cargo clippy --all-targets --all-features -- -D warnings
 cargo test
 cargo build --release
+
+# Web 开发检查；仅开发时需要 Node 22.13+，运行 binary 不需要
+npm ci --ignore-scripts
+npm run format:check
+npm run lint
+npm test
 ```
 
 所有测试使用合成 fixture / 临时目录，不修改真实 Codex 数据。Linux 终端集成验收：
 
 ```bash
 python3 scripts/terminal_qa.py target/release/codex-nav
+
+# 真实浏览器验收（需要已连接的本机 web-access CDP Proxy :3456）
+node scripts/web_qa.mjs target/release/codex-nav
+node scripts/web_qa.mjs target/release/codex-nav --no-watch
 ```
 
 只读统计与性能工具（不输出 Prompt）：
@@ -174,7 +187,31 @@ cargo run --release --example benchmark
 
 ## Web 查看
 
-当前只支持终端查看，不包含 Web 页面或 HTTP 服务。核心解析、发现、监控和搜索可以复用于未来本机 Web 版，但仍需新增只读接口、事件推送及网页前端；详见 [Web 支持边界](docs/architecture.md#web-支持边界)。
+```bash
+# 启动并打开默认浏览器
+./target/release/codex-nav --web
+
+# 不自动打开；复制终端打印的完整地址到本机浏览器
+./target/release/codex-nav --web --no-open
+
+# 端口被占用时自动选择空闲端口；查看全部日期的主会话
+./target/release/codex-nav --web --port 0 --all
+
+# 直接阅读指定会话，禁用自动更新
+./target/release/codex-nav --web --session SESSION_ID --no-watch
+```
+
+默认监听 `127.0.0.1:8765`。启动地址带有随机访问令牌，请使用终端打印的完整 URL，而不是只输入端口地址。令牌只对本次进程有效，页面读取后从地址栏移除，保存在当前标签页的 sessionStorage 以支持刷新；没有账号、登录或云服务。不要分享带令牌的地址。
+
+默认先选主会话，支持标题/目录/ID 搜索与近期/全部日期切换。打开后左侧搜索 Prompt，正文展示输入、折叠活动和可靠标记的最终回复；长目录和活动分页加载。`f` 定位最终回复，`s` 返回列表，`r` 刷新，`?` 查看帮助。`g/G` 按当前焦点操作目录首尾或正文首尾，手机窄屏保持语义。输入框内不会劫持文字快捷键。复制操作只复制已保留文本，不补读已省略历史。
+
+页面定期检查轻量元数据，仅变化时更新内容；查看历史时保留选择与阅读位置，出现新轮次时显示提示。文件监控不代表 Codex 正在执行。活动警告与执行状态独立，最终结果由用户阅读回复判断。`--no-watch` 下使用刷新按钮或 `r` 手动读取。
+
+每页最多 100 轮；活动每次读取 8 条，页面最多保留 64 条活动节点，更多内容通过前后组查看，整轮复制不受当前活动页限制。服务最多缓存两个已打开会话，切回已淘汰会话会重新解析；单个进程最多登记 20,000 个会话，达到上限会提示。沿用终端的正文内存预算，不恢复已省略历史全文。Markdown 支持标题、列表、代码、引用与安全链接，复杂表格、公式等可能显示为原始文本，不加载图片附件。
+
+关闭标签页不停止服务；回到启动终端按 `Ctrl+C` 停止 Navigator，不影响 Codex。浏览器打不开时使用 `--no-open` 并手动访问地址。Web 不提供修改、发送 Prompt、删除或下载任意本机文件的接口。
+
+仅面向本机可信环境，不支持公网发布、局域网共享或远程手机访问；窄屏支持是布局适配，不表示开放网络监听。所有网页资源随 binary 提供，没有 CDN、外部字体或自动加载远程图片。Markdown 为安全阅读子集，不执行日志里的 HTML 或脚本。详见 [Web 支持边界](docs/architecture.md#web-支持边界)。
 
 ## 本地开发时间线与版本
 

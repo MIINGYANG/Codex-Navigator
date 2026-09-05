@@ -8,3 +8,4 @@ pub mod parser;
 pub mod ui;
 pub mod util;
 pub mod watch;
+pub mod web;

@@ -15,7 +15,16 @@ fn cli_help_version_and_noninteractive_message() {
     let help = command(&root).arg("--help").output().unwrap();
     assert!(help.status.success());
     let help = String::from_utf8(help.stdout).unwrap();
-    for option in ["--session", "--cwd", "--all", "--no-watch", "doctor"] {
+    for option in [
+        "--session",
+        "--cwd",
+        "--all",
+        "--no-watch",
+        "--web",
+        "--port",
+        "--no-open",
+        "doctor",
+    ] {
         assert!(help.contains(option));
     }
     let version = command(&root).arg("--version").output().unwrap();
@@ -28,6 +37,22 @@ fn cli_help_version_and_noninteractive_message() {
     assert!(String::from_utf8(tui.stderr)
         .unwrap()
         .contains("interactive terminal"));
+}
+
+#[test]
+fn web_options_require_web_and_validate_port() {
+    let root = TempDir::new().unwrap();
+    for args in [
+        vec!["--port", "1234"],
+        vec!["--no-open"],
+        vec!["--web", "--port", "65536"],
+        vec!["--web", "--port", "-1"],
+        vec!["--web", "doctor"],
+    ] {
+        let output = command(&root).args(&args).output().unwrap();
+        assert!(!output.status.success(), "accepted {args:?}");
+        assert!(!output.stderr.is_empty());
+    }
 }
 
 #[test]
