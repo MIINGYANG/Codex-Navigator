@@ -33,3 +33,9 @@
 **Key insight:** 轮次生命周期只依据明确结束、执行错误或中断事件；活动错误是独立事实，不能覆盖生命周期，也不能作为答案正确性的代理指标。失败后重试并结束应显示 ✓ !N，用户通过最终回复判断结果；晚到记录和 rollback 也必须保持这一分离。
 **Details / snippet:** v1.1.2 新增 10 项回归，全量 132 tests、fmt、clippy、release 和 6 组终端验收通过。当前核心可复用于未来 Web，但 HTTP/API、序列化适配和网页界面均尚未实现。
 **Tags:** #state #parser #ux #verification #architecture
+
+## 2026-09-06 — 先比较阅读路径，再实现 Web
+**Question:** 如何在正式实现 --web 前，让用户选择清晰且可比较的设计？
+**Key insight:** 设计预选应提供相同核心操作下的不同信息布局，而非同一模板换色。用合成数据制作独立 HTML，让用户实际体验会话入口、时间线、最终回复和手机排版；明确预览与正式数据接入的边界，选择确认前不推进后端。
+**Details / snippet:** A 三栏工作台、B 长文阅读、C 深色双区控制台，统一 gallery 切换。六组桌面/手机浏览器交互各 18 断言通过；原有 132 tests 与 release 检查通过。正式版本保持 v1.1.2，用户尚未选定 Web 方案。
+**Tags:** #design #web #prototype #interaction #verification
