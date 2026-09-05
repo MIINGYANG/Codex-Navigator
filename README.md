@@ -18,7 +18,7 @@ Codex CLI 的本地只读终端 Sidecar。快速定位历史 Prompt，浏览回�
 
 ## 功能
 
-- 自动发现当前目录对应的会话；多候选进入可搜索的 Session Picker。
+- 启动先进入可搜索的主会话 Session Picker，当前目录相关会话优先，确认后打开。
 - 按 Turn 浏览完整 Prompt、公开回复、工具调用、文件活动和可靠失败信息。
 - 中文、大小写无关 substring 与英文 fuzzy 搜索；同分时优先较新的 Turn。
 - 后台流式加载，实时增量更新；查看历史时保留选择，显示 `+N new turns`。
@@ -56,7 +56,7 @@ cd /path/to/project
 codex-nav
 ```
 
-按 `/` 输入关键字，Enter 打开结果。在正文中按 `g/G` 跳到顶部/底部；按 Tab 切回时间线后，`G` 返回最新有效 Turn。`q` 或 `Ctrl+C` 退出。Navigator 不启动、不接管 Codex；退出不会影响另一个终端。
+启动后先选择主会话：`j/k` 或方向键移动，Enter 打开，即使只有一个候选也不会自动进入。`/` 搜索会话；打开后 `/` 搜索 Prompt。在正文中按 `g/G` 跳到顶部/底部；按 Tab 切回时间线后，`G` 返回最新有效 Turn。`q` 或 `Ctrl+C` 退出。Navigator 不启动、不接管 Codex；退出不会影响另一个终端。
 
 ## 快捷键
 
@@ -81,9 +81,9 @@ codex-nav
 
 ## 会话发现
 
-优先使用 `CODEX_HOME`；未设置则使用用户目录下 `.codex`。读取 `sessions/YYYY/MM/DD/rollout-*.jsonl`，默认扫描最近 7 天。当前 cwd 精确匹配优先，父/子目录其次，同级别按 MAIN → UNKNOWN → SUBAGENT、更新时间排序。唯一相关 MAIN 自动打开，多个 MAIN 进入 Picker；没有 MAIN 时仅单一 UNKNOWN 可自动打开。子代理不会自动打开，但可在 Picker 中选择或用 `--session` 指定。无匹配时展示近期会话。`--all` 强制 Picker 并扩展到全部日期。
+优先使用 `CODEX_HOME`；未设置则使用用户目录下 `.codex`。读取 `sessions/YYYY/MM/DD/rollout-*.jsonl`，默认扫描最近 7 天。启动、`s` 返回及 `r` 刷新均进入主会话 Picker，不再自动打开。列表只显示明确识别为 MAIN 的会话；SUBAGENT 和 UNKNOWN 均隐藏。当前 cwd 精确匹配优先，父/子目录其次，同级别按更新时间排序；无匹配时展示近期主会话。`--all` 扩展到全部日期，仍只列主会话。
 
-Picker 和会话头部显示 MAIN / SUBAGENT / UNKNOWN、代理标识、父会话短 ID 和更新时间。缺失或未知来源不猜测身份；单独 fork 不等于子代理。`WATCHING` 仅表示 Navigator 正在监控文件，不表示 Codex 正在执行任务；`STATIC` 表示未启用监控。
+Picker 显示主会话标题、目录、短 ID、轮数和更新时间。需要检查非主会话时，可显式使用 `--session ID/PATH` 打开其独立日志；不会重定向父会话。缺失或未知来源不猜测身份；单独 fork 不等于子代理。会话头部仍显示真实身份。`WATCHING` 仅表示 Navigator 正在监控文件，不表示 Codex 正在执行任务；`STATIC` 表示未启用监控。
 
 按 `f` 定位当前轮的 `FINAL ANSWER`，不会切换到最新轮或清除历史新增提示。最终回复只依据 `phase=final_answer` 或 completion 的 `last_agent_message`；缺少标记或正文已淘汰时会提示不可定位，不把最后一条进度消息当最终答案。
 

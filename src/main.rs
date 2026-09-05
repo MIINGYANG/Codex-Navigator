@@ -66,7 +66,9 @@ fn scan(
         let found = if let Some(id) = session {
             discovery::resolve_session(&home, &id, &config).map(Found::Path)
         } else {
-            discovery::discover(&home, &cwd, all, &config).map(Found::Sessions)
+            discovery::discover(&home, &cwd, all, &config)
+                .map(discovery::main_sessions)
+                .map(Found::Sessions)
         };
         let _ = tx.send(found);
     });
@@ -105,7 +107,6 @@ fn run() -> Result<()> {
         config.clone(),
         cli.session,
     ));
-    let mut allow_auto = !cli.all;
     let mut worker: Option<SessionWorker> = None;
     let mut current_path: Option<PathBuf> = None;
     let mut summaries: Vec<SessionSummary> = Vec::new();
@@ -126,34 +127,24 @@ fn run() -> Result<()> {
                         counter = None;
                         count_cursor = 0;
                         summaries = found;
-                        let auto = if allow_auto {
-                            discovery::auto_select(&summaries, &cwd)
+                        let exact = summaries.iter().any(|s| {
+                            s.cwd.as_ref().is_some_and(|p| {
+                                p == &cwd
+                                    || p.canonicalize()
+                                        .ok()
+                                        .zip(cwd.canonicalize().ok())
+                                        .is_some_and(|(a, b)| a == b)
+                            })
+                        });
+                        let notice = if summaries.is_empty() {
+                            "Only main sessions are listed. Try --all for older sessions, or --session ID/PATH to open another source."
+                        } else if !exact {
+                            "No recent main session matched this directory. Select from recent main sessions · / search"
                         } else {
-                            None
+                            "Select a main session · Enter open · / search"
                         };
-                        allow_auto = false;
-                        if let Some(index) = auto {
-                            Some(summaries[index].path.clone())
-                        } else {
-                            let exact = summaries.iter().any(|s| {
-                                s.cwd.as_ref().is_some_and(|p| {
-                                    p == &cwd
-                                        || p.canonicalize()
-                                            .ok()
-                                            .zip(cwd.canonicalize().ok())
-                                            .is_some_and(|(a, b)| a == b)
-                                })
-                            });
-                            let notice = if summaries.is_empty() {
-                                "No readable sessions found. Start Codex, then press r; try --all or doctor."
-                            } else if !exact {
-                                "No recent Codex session matched this directory. Showing recent sessions instead."
-                            } else {
-                                "Select a session · / search"
-                            };
-                            app.show_picker(summaries.clone(), Some(notice.into()));
-                            None
-                        }
+                        app.show_picker(summaries.clone(), Some(notice.into()));
+                        None
                     }
                     Err(e) => {
                         app.toast = Some(sanitize(&format!("{e:#}")));
@@ -287,7 +278,6 @@ fn run() -> Result<()> {
                     Action::ShowPicker => {
                         counter = None;
                         worker = None;
-                        allow_auto = false;
                         app.show_picker(
                             summaries.clone(),
                             Some("Refreshing local sessions…".into()),

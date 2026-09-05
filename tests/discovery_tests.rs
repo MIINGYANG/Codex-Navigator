@@ -3,7 +3,7 @@ use clap::Parser;
 use codex_navigator::{
     cli::{Cli, Command},
     config::Config,
-    discovery::{auto_select, codex_home_from, discover, resolve_session},
+    discovery::{codex_home_from, discover, resolve_session},
 };
 use serde_json::json;
 use std::ffi::OsStr;
@@ -42,7 +42,6 @@ fn discovery_exact_cwd_has_priority_over_related_and_unrelated() {
         sessions.iter().map(|s| s.id.as_str()).collect::<Vec<_>>(),
         ["exact", "related", "unrelated"]
     );
-    assert_eq!(auto_select(&sessions, Path::new("/project")), Some(0));
     assert_eq!(
         sessions[0].first_prompt.as_deref(),
         Some("修复 authentication")
@@ -51,7 +50,7 @@ fn discovery_exact_cwd_has_priority_over_related_and_unrelated() {
 }
 
 #[test]
-fn discovery_multiple_exact_sessions_require_picker() {
+fn discovery_preserves_multiple_exact_sessions() {
     let temp = TempDir::new().unwrap();
     fixture(temp.path(), 0, "first", "/project");
     fixture(temp.path(), 1, "second", "/project");
@@ -63,7 +62,6 @@ fn discovery_multiple_exact_sessions_require_picker() {
     )
     .unwrap();
     assert_eq!(sessions.len(), 2);
-    assert_eq!(auto_select(&sessions, Path::new("/project")), None);
 }
 
 #[test]
@@ -78,7 +76,6 @@ fn discovery_missing_index_and_unmatched_cwd_show_recent_picker() {
     )
     .unwrap();
     assert_eq!(sessions.len(), 1);
-    assert_eq!(auto_select(&sessions, Path::new("/unrelated")), None);
 }
 
 #[test]
@@ -326,7 +323,6 @@ fn discovery_related_paths_use_components_not_string_prefix() {
     )
     .unwrap();
     assert_eq!(sessions[0].id, "child");
-    assert_eq!(auto_select(&sessions, Path::new("/project")), Some(0));
 }
 
 #[test]

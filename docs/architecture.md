@@ -10,7 +10,7 @@ codex-nav 是本机独立 Rust TUI，运行时没有网络客户端、数据库�
 
 ## 模块
 
-- discovery：CODEX_HOME、日期目录、有限 header 解析、索引尾部辅助、cwd 排序。热路径仅扫描近期日期，--all 才遍历完整日期层级。
+- discovery：CODEX_HOME、日期目录、有限 header 解析、索引尾部辅助、cwd 排序。热路径仅扫描近期日期，--all 才遍历完整日期层级。Picker 的发现结果统一过滤为 MAIN；底层发现保留全部类型供显式 --session 解析，避免过滤影响 ID/path 诊断入口。默认始终等待用户选择，不自动打开。
 - parser：JSONL 有界缓冲、归一化、Turn 分组、去重、工具活动、可靠状态和 rollback。UI 不接触 serde_json::Value。
 - watch：独立读取线程；有界通道最多排队两批。dirty 集合仅传递发生变化的 Turn。文件通知作为提示，100 ms 轮询作为可靠后备；只追加时不重读历史。
 - app / index：键盘状态、搜索索引、历史选择保护、可见文本缓存。

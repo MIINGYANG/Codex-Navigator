@@ -1,5 +1,18 @@
 # Codex Navigator v1.0 实施计划
 
+## v1.1.1 — 默认主会话选择入口
+
+按最新反馈修正入口：不传 --session 时始终进入 Picker，只列明确识别为 MAIN 的会话；子代理与 UNKNOWN 不进入列表。--all 仅扩展日期范围；显式 --session 仍可直接打开任意类型，不重定向父会话。保留 cwd 相关度与更新时间排序。
+
+- [x] 补充主会话过滤、显式打开非主会话、单一主会话不自动打开和返回/刷新 Picker 回归。
+- [x] 移除自动打开路径，统一启动与返回列表的主会话过滤，更新空态和 CLI 说明。
+- [x] 同步文档、经验、版本；通过 fmt、clippy、全量 tests、release 和实际终端验收。
+- [x] 记录验收结果并核对本地 v1.1.1 提交内容与标签命名，不执行 push。
+
+### v1.1.1 验收结果
+
+122 tests 全部通过，fmt、clippy 零 warning、release build 通过。旧 release 已由真实终端测试复现唯一 MAIN 自动打开，新版终端 5 组验收通过，覆盖启动/Enter/s/r/搜索/--all、非主会话空态、显式子会话 ID/path 和原有 f/g/G/终端恢复。所有合成文件 hash 不变，不修改 Codex 数据。交付版本为 1.1.1，以独立本地 commit/tag 保存。
+
 已完整阅读产品规格及使用指南。执行采用规格指定的 Rust 独立 TUI，不修改 Codex，不包装 Codex PTY，不写入 CODEX_HOME；无需阶段性确认。
 
 - [x] Phase 0：检查工具链与真实会话结构，建立 crate 和兼容性记录，构建成功。

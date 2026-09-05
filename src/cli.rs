@@ -14,7 +14,7 @@ pub struct Cli {
     /// Prefer sessions belonging to this directory (defaults to the current directory).
     #[arg(long, value_name = "PATH")]
     pub cwd: Option<PathBuf>,
-    /// Include the complete session history in the picker.
+    /// Include all dates in the main-session picker (subagents and unknown sources stay hidden).
     #[arg(long)]
     pub all: bool,
     /// Disable automatic updates; use r to refresh manually.

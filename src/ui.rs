@@ -331,7 +331,7 @@ fn picker(frame: &mut Frame, app: &mut App, area: Rect) {
             Paragraph::new(if app.searching {
                 "No matching sessions. Esc clears search."
             } else {
-                "No Codex sessions found. Start Codex in another terminal, then press r to refresh."
+                "No main sessions found. Start Codex in another terminal, then press r to refresh."
             })
             .wrap(Wrap { trim: true }),
             inner,

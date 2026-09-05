@@ -28,6 +28,84 @@ def record(payload):
     return (json.dumps({"type": "event_msg", "payload": payload}, ensure_ascii=False) + "\n").encode()
 
 
+def picker_session(test_root, session_id, source, prompt):
+    sessions = test_root / "codex" / "sessions"
+    sessions.mkdir(parents=True, exist_ok=True)
+    path = sessions / ("rollout-" + session_id + ".jsonl")
+    path.write_bytes(
+        (json.dumps({"type": "session_meta", "payload": {
+            "id": session_id, "source": source, "cwd": str(Path.cwd())}}) + "\n").encode()
+        + record({"type": "user_message", "message": prompt})
+        + record({"type": "agent_message", "message": "Synthetic session reply"}))
+    return path
+
+
+def verify_main_picker(binary, root):
+    picker_root = root / "picker"
+    main_prompt = "PRIMARY SESSION CHOICE"
+    main_path = picker_session(picker_root, "qa-main", "cli", main_prompt)
+    app = Navigator(binary, [], picker_root)
+    app.expect("SESSIONS")
+    app.expect(main_prompt)
+    assert "TIMELINE" not in app.screen.text(), "unique main session was opened automatically"
+    app.send("\r")
+    app.expect("TIMELINE")
+    app.expect(main_prompt)
+    app.send("s")
+    app.expect("SESSIONS")
+    app.expect(main_prompt)
+    app.close()
+
+    child_prompt = "ZZZZZZZZZZ CHILD HIDDEN"
+    unknown_prompt = "XXXXXXXXXX UNKNOWN HIDDEN"
+    child_source = {"subagent": {"thread_spawn": {
+        "parent_thread_id": "qa-main", "agent_nickname": "Hidden child"}}}
+    child_path = picker_session(picker_root, "qa-child", child_source, child_prompt)
+    unknown_path = picker_session(picker_root, "qa-unknown", "future-source", unknown_prompt)
+    paths = (main_path, child_path, unknown_path)
+    digests = {path: hashlib.sha256(path.read_bytes()).digest() for path in paths}
+    for arguments in ([], ["--all"]):
+        app = Navigator(binary, arguments, picker_root)
+        app.expect("SESSIONS")
+        app.expect(main_prompt)
+        for query in (child_prompt, unknown_prompt):
+            assert query not in app.screen.text(), "non-main session was listed"
+            app.send("/" + query)
+            app.expect("No matching sessions")
+            app.send("\x1b")
+            app.expect(main_prompt)
+        app.send("r")
+        app.expect(main_prompt)
+        assert "[SUBAGENT]" not in app.screen.text(), "refresh exposed a child session"
+        assert "[UNKNOWN]" not in app.screen.text(), "refresh exposed an unknown session"
+        app.close()
+
+    for selector in (str(child_path), "qa-child"):
+        app = Navigator(binary, ["--session", selector], picker_root)
+        app.expect("TIMELINE")
+        app.expect("SUBAGENT")
+        app.expect(child_prompt)
+        assert main_prompt not in app.screen.text(), "explicit child session redirected to parent"
+        app.send("s")
+        app.expect("SESSIONS")
+        app.expect(main_prompt)
+        assert child_prompt not in app.screen.text(), "returning to picker exposed a child session"
+        app.close()
+
+    other_root = root / "non-main-picker"
+    picker_session(other_root, "qa-child-only", child_source, child_prompt)
+    picker_session(other_root, "qa-unknown-only", "future-source", unknown_prompt)
+    for arguments in ([], ["--all"]):
+        app = Navigator(binary, arguments, other_root)
+        app.expect("No main sessions found")
+        assert child_prompt not in app.screen.text(), "non-main-only picker exposed a child session"
+        assert unknown_prompt not in app.screen.text(), "non-main-only picker exposed an unknown session"
+        app.close()
+    for path, digest in digests.items():
+        assert hashlib.sha256(path.read_bytes()).digest() == digest, "picker modified a session"
+    print("PASS terminal: startup-picker/main-only/search/refresh/all/explicit-child-path-and-id/read-only")
+
+
 class Navigator:
     def __init__(self, binary, args, test_root):
         self.master, self.slave = pty.openpty()
@@ -223,9 +301,11 @@ def main():
         print("PASS terminal: Ctrl+C restores termios and alternate screen")
 
         app = Navigator(binary, [], root)
-        app.expect("No Codex sessions found")
+        app.expect("No main sessions found")
         app.close()
         print("PASS terminal: empty-session picker")
+
+        verify_main_picker(binary, root)
 
         final_session = root / "rollout-final.jsonl"
         final_session.write_bytes(

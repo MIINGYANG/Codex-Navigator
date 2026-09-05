@@ -21,3 +21,9 @@
 **Key insight:** 全局只增不减的正文预算会优先牺牲最新信息；Prompt 与活动应分开使用滚动预算，淘汰旧正文时同步 dirty Turn、搜索和省略提示。会话身份必须来自首条结构化 metadata；最终回复必须依据 phase 或 completion，并在镜像去重时保留后补的语义标记。
 **Details / snippet:** v1.1.0：16 MiB Prompt / 48 MiB 活动预算，f 使用结构化折行锚点。121 tests、fmt、clippy、release、实际终端验收通过；真实 MAIN/SUBAGENT 检查正确，历史文件 hash 不变。模糊搜索测试应核对精确项排名首位，不能假定其他子序列候选不存在。
 **Tags:** #parser #memory #session #navigation #testing
+
+## 2026-09-06 — 主会话优先的显式选择入口
+**Question:** 为什么默认先选 Session、隐藏子代理更符合日常使用？
+**Key insight:** 底层支持的日志类型不必全部进入产品默认列表；用户通常想找自己的主任务，而非内部代理。将主会话过滤放在 Picker 发现入口，既统一启动/返回/刷新行为，又保留显式 ID/path 打开特殊来源的诊断能力。
+**Details / snippet:** v1.1.1 移除自动打开，列表严格只含 MAIN；--all 仅扩展日期。122 tests、fmt、clippy、release 与 5 组终端验收通过；旧版已复现唯一主会话自动打开的问题，新版 Enter 确认及显式子会话不重定向均通过。
+**Tags:** #ux #session #picker #regression #verification

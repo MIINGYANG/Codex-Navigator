@@ -1,6 +1,6 @@
 use codex_navigator::{
     config::Config,
-    discovery::{auto_select, discover, resolve_session},
+    discovery::{discover, main_sessions, resolve_session},
     domain::{SessionIdentity, SessionKind, SessionSummary},
     parser::{identity::parse_identity, jsonl_reader::Record, Parser},
 };
@@ -129,39 +129,83 @@ fn summary(kind: SessionKind, cwd: &str) -> SessionSummary {
 }
 
 #[test]
-fn auto_selection_prefers_unique_main_but_keeps_multiple_mains_in_picker() {
-    let cwd = Path::new("/synthetic/project");
-    let mut sessions = vec![
-        summary(SessionKind::Subagent, cwd.to_str().unwrap()),
-        summary(SessionKind::Unknown, cwd.to_str().unwrap()),
-        summary(SessionKind::Main, cwd.to_str().unwrap()),
-    ];
-    assert_eq!(auto_select(&sessions, cwd), Some(2));
-    sessions.push(summary(SessionKind::Main, cwd.to_str().unwrap()));
-    assert_eq!(auto_select(&sessions, cwd), None);
+fn main_picker_filters_non_main_without_changing_discovery_order() {
+    let sessions = main_sessions(vec![
+        summary(SessionKind::Subagent, "/synthetic/project"),
+        summary(SessionKind::Main, "/synthetic/project"),
+        summary(SessionKind::Unknown, "/synthetic/project"),
+        summary(SessionKind::Main, "/synthetic"),
+    ]);
+    assert_eq!(sessions.len(), 2);
+    assert_eq!(
+        sessions[0].cwd.as_deref(),
+        Some(Path::new("/synthetic/project"))
+    );
+    assert_eq!(sessions[1].cwd.as_deref(), Some(Path::new("/synthetic")));
+    assert!(sessions
+        .iter()
+        .all(|s| s.identity.kind == SessionKind::Main));
 }
 
 #[test]
-fn auto_selection_never_silently_opens_a_known_subagent() {
-    let cwd = Path::new("/synthetic/project");
+fn main_picker_is_empty_for_unknown_and_subagent_only() {
+    assert!(main_sessions(Vec::new()).is_empty());
+    assert!(main_sessions(vec![
+        summary(SessionKind::Unknown, "/synthetic/project"),
+        summary(SessionKind::Subagent, "/synthetic/project"),
+    ])
+    .is_empty());
     assert_eq!(
-        auto_select(&[summary(SessionKind::Subagent, "/synthetic/project")], cwd),
-        None
+        main_sessions(vec![summary(SessionKind::Main, "/synthetic/project")]).len(),
+        1
     );
-    assert_eq!(
-        auto_select(&[summary(SessionKind::Unknown, "/synthetic/project")], cwd),
-        Some(0)
-    );
-    // An exact match remains more relevant than an unrelated or parent-directory main.
-    assert_eq!(
-        auto_select(
-            &[
-                summary(SessionKind::Unknown, "/synthetic/project"),
-                summary(SessionKind::Main, "/synthetic")
-            ],
-            cwd
+}
+
+#[test]
+fn explicit_non_main_resolution_is_not_filtered_or_redirected_to_parent() {
+    let temp = TempDir::new().unwrap();
+    for (id, source) in [
+        ("main", json!("cli")),
+        (
+            "agent",
+            json!({"subagent":{"thread_spawn":{"parent_thread_id":"main"}}}),
         ),
-        Some(0)
+        ("unknown", Value::Null),
+    ] {
+        write_rollout(
+            temp.path(),
+            id,
+            "/synthetic/project",
+            source,
+            "2026-09-06T00:00:00Z",
+        );
+        let path = temp
+            .path()
+            .join("sessions")
+            .join(format!("rollout-{id}.jsonl"));
+        assert_eq!(
+            resolve_session(temp.path(), id, &Config::default()).unwrap(),
+            path
+        );
+        assert_eq!(
+            resolve_session(temp.path(), path.to_str().unwrap(), &Config::default()).unwrap(),
+            path
+        );
+    }
+    let discovered = discover(
+        temp.path(),
+        Path::new("/synthetic/project"),
+        true,
+        &Config::default(),
+    )
+    .unwrap();
+    assert_eq!(discovered.len(), 3);
+    assert_eq!(
+        main_sessions(discovered)
+            .iter()
+            .map(|s| s.id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main"]
     );
 }
 

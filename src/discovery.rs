@@ -73,28 +73,10 @@ pub fn discover(
     Ok(summaries)
 }
 
-pub fn auto_select(summaries: &[SessionSummary], cwd: &Path) -> Option<usize> {
-    let cwd = normalized_path(cwd);
-    for priority in [2, 1] {
-        let matches: Vec<_> = summaries
-            .iter()
-            .enumerate()
-            .filter(|(_, session)| relationship(session.cwd.as_deref(), &cwd) == priority)
-            .collect();
-        if matches.is_empty() {
-            continue;
-        }
-        let mut main = matches
-            .iter()
-            .filter(|(_, session)| session.identity.kind == SessionKind::Main);
-        if let Some((index, _)) = main.next() {
-            return main.next().is_none().then_some(*index);
-        }
-        // Preserve legacy selection only when the single candidate is not a known agent.
-        return (matches.len() == 1 && matches[0].1.identity.kind == SessionKind::Unknown)
-            .then_some(matches[0].0);
-    }
-    None
+/// Picker-only policy: explicit ID/path resolution still includes every source kind.
+pub fn main_sessions(mut summaries: Vec<SessionSummary>) -> Vec<SessionSummary> {
+    summaries.retain(|session| session.identity.kind == SessionKind::Main);
+    summaries
 }
 
 fn identity_priority(kind: SessionKind) -> u8 {

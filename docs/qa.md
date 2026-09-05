@@ -84,3 +84,12 @@ cargo install --path . --locked
 - 256 MiB 超大单行流式跳过：40.95 ms，之后 Prompt 正常；该基准进程峰值 RSS 57,420 KiB（并非所有工作负载的内存保证）。
 
 已知边界：Prompt 单轮 256 KiB；默认单记录 4 MiB；100,000 Turn / 200,000 活动仍为硬上限。超限旧正文仅保留预览/省略标记，不做磁盘分页恢复；f 只定位仍保留的可靠 final。16 / 48 MiB 是正文预算，不是总进程内存上限。Windows/macOS 未在本机实测。
+
+## v1.1.1 — 2026-09-06
+
+- 默认先选主会话，不再自动打开唯一候选；启动、s 返回和 r 刷新的列表均只包含 MAIN，--all 仅扩展日期范围。
+- 替换旧自动选择策略测试，新增显式非主会话解析测试；全量 122 tests 通过。
+- fmt、clippy（--all-targets --all-features，零 warning）、release build、git diff --check 通过；binary 返回 codex-nav 1.1.1。
+- `python3 -B scripts/terminal_qa.py target/release/codex-nav`：5 组全部通过。新入口测试先在旧 release 复现自动打开错误，新版覆盖唯一 MAIN 选择、Enter、s、r、隐藏来源搜索、--all、仅非主空态、显式子会话 path/ID 不重定向父会话。
+- 保留导航/搜索/历史保护/实时追加/resize/gG/final f/剪贴板降级/q/Ctrl+C/终端恢复回归，合成 rollout 前后 SHA-256 不变；本轮无需修改或读取真实 Codex 数据。
+- 来源缺失或不认识的 UNKNOWN 不显示在默认列表；需要查看时使用 --session ID/PATH。未改变历史正文预算与平台限制。
