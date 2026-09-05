@@ -157,7 +157,8 @@ impl Parser {
                 }
             }
             "turn_started" | "task_started" | "turn_complete" | "task_complete"
-            | "thread_rollback" | "thread_rolled_back" => self.event(v, timestamp),
+            | "turn_completed" | "turn_aborted" | "turn_error" | "error" | "thread_rollback"
+            | "thread_rolled_back" => self.event(v, timestamp),
             // Compaction replacement_history is context, never a new conversation.
             "compacted" | "world_state" | "token_usage_record" => (),
             _ => self.session.parse_stats.unknown_records += 1,
@@ -179,9 +180,10 @@ impl Parser {
                 time(p.get("started_at")).or(timestamp),
             ),
             "task_complete" | "turn_complete" | "turn_completed" => {
-                self.complete(p, timestamp, false)
+                self.complete(p, timestamp, TurnStatus::Completed)
             }
-            "turn_aborted" | "turn_error" | "error" => self.complete(p, timestamp, true),
+            "turn_aborted" => self.complete(p, timestamp, TurnStatus::Interrupted),
+            "turn_error" | "error" => self.complete(p, timestamp, TurnStatus::Failed),
             "user_message" => {
                 let text = activity::text(
                     p.get("message")
@@ -537,9 +539,6 @@ impl Parser {
             TurnItem::ToolOutput { summary, is_error } => {
                 if is_error {
                     self.session.turns[i].activity.errors += 1;
-                    if self.session.turns[i].status != TurnStatus::RolledBack {
-                        self.session.turns[i].status = TurnStatus::Failed;
-                    }
                 }
                 TurnItem::ToolOutput {
                     summary: self.limited(summary, MAX_ITEM_BYTES),
@@ -571,7 +570,7 @@ impl Parser {
         self.items += 1;
         self.touch(i);
     }
-    fn complete(&mut self, p: &Value, timestamp: Option<DateTime<Utc>>, failed: bool) {
+    fn complete(&mut self, p: &Value, timestamp: Option<DateTime<Utc>>, outcome: TurnStatus) {
         let i = if let Some(id) = p.get("turn_id").and_then(Value::as_str) {
             self.turn_ids.get(id).copied()
         } else {
@@ -585,7 +584,16 @@ impl Parser {
         }
         let old = self.active;
         self.active = Some(i);
-        if let Some(text) = p.get("last_agent_message").and_then(Value::as_str) {
+        let outcome = if outcome == TurnStatus::Completed && activity::error(p) {
+            TurnStatus::Failed
+        } else {
+            outcome
+        };
+        if let Some(text) = p
+            .get("last_agent_message")
+            .and_then(Value::as_str)
+            .filter(|_| outcome == TurnStatus::Completed)
+        {
             let text = sanitize(text);
             if let Some(j) = self.session.turns[i]
                 .items
@@ -597,16 +605,10 @@ impl Parser {
                 self.agent(text, Some("final_answer"), "completion", "");
             }
         }
-        if failed || activity::error(p) {
-            self.session.turns[i].activity.errors += 1;
-        }
         let turn = &mut self.session.turns[i];
         turn.completed_at = time(p.get("completed_at")).or(timestamp);
-        turn.status = if turn.activity.errors > 0 {
-            TurnStatus::Failed
-        } else {
-            TurnStatus::Completed
-        };
+        // Completion is a lifecycle fact, never a verdict on the answer's correctness.
+        turn.status = outcome;
         // Completion is a submission boundary even if no assistant text was emitted.
         self.generation += 1;
         self.touch(i);

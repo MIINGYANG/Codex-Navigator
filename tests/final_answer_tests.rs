@@ -82,7 +82,7 @@ fn final_answer_anchor_survives_resize_and_repeated_jump_without_leaving_history
     key(&mut app, 'g');
     assert_eq!(app.viewer_lines(80, 5)[0], "USER");
     key(&mut app, 'G');
-    assert!(app.viewer_lines(80, 5).join("\n").contains("RESULT"));
+    assert!(app.viewer_lines(80, 5).join("\n").contains("TURN STATUS"));
 }
 
 #[test]

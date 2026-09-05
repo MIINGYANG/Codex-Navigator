@@ -599,7 +599,7 @@ fn turn_sections(turn: &Turn) -> Vec<(String, bool)> {
         ));
     }
     let mut out = format!(
-        "RESULT · {}\n{} commands · {} tools · {} files read · {} files changed · {} errors",
+        "TURN STATUS · {}\n{} commands · {} tools · {} files read · {} files changed\n{} activity errors (independent of turn status).\nCompletion is not a correctness verdict. Press f to review the final answer.",
         turn.status.label(),
         turn.activity.commands,
         turn.activity.tool_calls,
@@ -614,10 +614,7 @@ fn turn_sections(turn: &Turn) -> Vec<(String, bool)> {
         ));
     }
     if let Some(end) = turn.completed_at {
-        out.push_str(&format!(
-            "\nCompleted {}",
-            end.format("%Y-%m-%d %H:%M:%S UTC")
-        ));
+        out.push_str(&format!("\nEnded {}", end.format("%Y-%m-%d %H:%M:%S UTC")));
     }
     sections.push((out, false));
     sections

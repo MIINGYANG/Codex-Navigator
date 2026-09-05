@@ -374,7 +374,7 @@ fn parser_failed_tool_structured_statuses_and_legacy_exit_envelope() {
             json!({"type":"response_item","payload":{"type":"function_call_output","call_id":"a","output":output}}),
             json!({"type":"event_msg","payload":{"type":"task_complete"}}),
         ]);
-        assert_eq!(session.turns[0].status, TurnStatus::Failed, "{output}");
+        assert_eq!(session.turns[0].status, TurnStatus::Completed, "{output}");
         assert_eq!(session.turns[0].activity.errors, 1);
     }
 }
@@ -403,7 +403,8 @@ fn parser_current_tool_items_and_files_report_structured_failure() {
     ]);
     assert_eq!(session.turns[0].activity.files_changed, 1);
     assert_eq!(session.turns[0].activity.tool_calls, 1);
-    assert_eq!(session.turns[0].status, TurnStatus::Failed);
+    assert_eq!(session.turns[0].status, TurnStatus::InProgress);
+    assert_eq!(session.turns[0].activity.errors, 1);
 }
 
 #[test]

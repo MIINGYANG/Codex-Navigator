@@ -93,7 +93,7 @@ fn viewer_g_and_shift_g_work_after_wide_narrow_wide_resizes() {
         assert_eq!(app.selected, Some(1));
         assert_eq!(app.new_turns, 1);
         assert!(app.viewer_scroll > 0);
-        assert!(bottom.contains("Completed 2026-09-06 12:34:56 UTC"));
+        assert!(bottom.contains("Ended 2026-09-06 12:34:56 UTC"));
         assert!(!bottom.contains("USER"));
 
         press(&mut app, KeyCode::Char('g'));

@@ -237,7 +237,16 @@ fn timeline(frame: &mut Frame, app: &mut App, area: Rect) {
             } else {
                 " "
             };
-            let prefix = format!("{marker} {:02} {} ", turn.ordinal, turn.status.symbol());
+            let warning = if turn.activity.errors > 0 {
+                format!(" !{}", turn.activity.errors)
+            } else {
+                String::new()
+            };
+            let prefix = format!(
+                "{marker} {:02} {}{warning} ",
+                turn.ordinal,
+                turn.status.symbol()
+            );
             let width = inner
                 .width
                 .saturating_sub(unicode_width::UnicodeWidthStr::width(prefix.as_str()) as u16)
@@ -284,7 +293,7 @@ fn viewer(frame: &mut Frame, app: &mut App, area: Rect) {
                 "USER" | "AGENT" | "FINAL ANSWER" | "OUTPUT" | "NOTICE"
             ) || line.starts_with("ACTIVITY ·")
                 || line.starts_with("FILE ·")
-                || line.starts_with("RESULT ·")
+                || line.starts_with("TURN STATUS ·")
             {
                 Line::from(Span::styled(
                     line,
@@ -409,7 +418,7 @@ fn picker(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn help(frame: &mut Frame, area: Rect) {
     let width = area.width.min(76);
-    let height = area.height.min(20);
+    let height = area.height.min(25);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -418,23 +427,24 @@ fn help(frame: &mut Frame, area: Rect) {
     );
     frame.render_widget(Clear, popup);
     let lines = [
+        "✓ completed · ✕ execution error · ⊘ interrupted",
+        "… incomplete · ? unknown · ↶ rolled back",
+        "!N activity errors: independent of turn status",
+        "Status does not judge correctness. Review final answer (f).",
+        "",
         "↑/k ↓/j     Timeline: select turn · Viewer: scroll",
         "[ / ]       Previous / next turn from either pane",
-        "g / G       Timeline: first / latest active turn",
-        "            Viewer: top / bottom of the current turn",
-        "Tab         Switch timeline / viewer (also in narrow terminals)",
+        "g / G       Timeline: first/latest · Viewer: top/end",
+        "Tab         Switch timeline / viewer",
         "Enter       Focus viewer / open picker or search result",
-        "PgUp/PgDn   Scroll viewer by a page",
-        "Home / End  Viewer top / bottom",
-        "f           Jump to the last retained final answer in this turn",
-        "/           Search prompts, or picker title / cwd / id / identity",
+        "PgUp/PgDn   Page · Home/End: viewer top/bottom",
+        "f           Last retained final answer in current turn",
+        "/           Search prompts / sessions",
         "Esc         Cancel search / focus timeline / leave picker",
-        "c / C       Copy prompt / visible turn text",
-        "r / s       Refresh / session picker",
+        "c / C       Copy prompt/turn · r refresh · s sessions",
         "q / Ctrl+C  Exit Navigator safely",
-        "",
         "New turns follow only while the latest turn is selected.",
-        "? / Esc / Enter closes help. All session access is read-only.",
+        "? / Esc / Enter closes help. Read-only session access.",
     ]
     .join("\n");
     frame.render_widget(

@@ -93,3 +93,12 @@ cargo install --path . --locked
 - `python3 -B scripts/terminal_qa.py target/release/codex-nav`：5 组全部通过。新入口测试先在旧 release 复现自动打开错误，新版覆盖唯一 MAIN 选择、Enter、s、r、隐藏来源搜索、--all、仅非主空态、显式子会话 path/ID 不重定向父会话。
 - 保留导航/搜索/历史保护/实时追加/resize/gG/final f/剪贴板降级/q/Ctrl+C/终端恢复回归，合成 rollout 前后 SHA-256 不变；本轮无需修改或读取真实 Codex 数据。
 - 来源缺失或不认识的 UNKNOWN 不显示在默认列表；需要查看时使用 --session ID/PATH。未改变历史正文预算与平台限制。
+
+## v1.1.2 — 2026-09-06
+
+- 旧实现红测复现：工具输出非零退出码后收到正常 task_complete，状态仍为 Failed。修复后只保留独立活动警告，正常完成显示 ✓。
+- 新增 6 项 parser/state 回归：失败→重试→完成、明确执行错误与中断、completion 自带错误、晚到工具输出不覆盖生命周期且不抢选择、rollback 保护、仅有最终回复文本不推断完成。
+- 新增 4 项 UI 回归：全部生命周期与 !N 分离、24/60/120/140 列布局、正文正确性免责声明、窄屏帮助图例。
+- `cargo test`：132 tests 全部通过。`cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、release build 和 diff 检查通过。
+- `python3 -B scripts/terminal_qa.py target/release/codex-nav`：6 组通过，新增 ✓ !1 / … !1 / ⊘ / ✕、正文 TURN STATUS、f 最终回复、宽窄切换和免责声明验收，原有主会话 Picker / gG / 退出恢复全部保留。合成源文件 SHA-256 不变。
+- 本机只读抽样 12 份 rollout，确认 task_complete / turn_aborted 的实际结构，未输出内容。Web 目前不支持直接查看，仅记录核心可复用与缺少 HTTP/API/前端的边界，未创建服务或网络监听。

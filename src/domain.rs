@@ -141,6 +141,7 @@ pub struct ActivitySummary {
     pub tool_calls: usize,
     pub files_read: usize,
     pub files_changed: usize,
+    /// Observed activity errors, independent of the turn's lifecycle or answer quality.
     pub errors: usize,
 }
 
@@ -149,6 +150,7 @@ pub enum TurnStatus {
     InProgress,
     Completed,
     Failed,
+    Interrupted,
     #[default]
     Unknown,
     RolledBack,
@@ -159,7 +161,8 @@ impl TurnStatus {
         match self {
             Self::InProgress => "incomplete",
             Self::Completed => "completed",
-            Self::Failed => "detected failure",
+            Self::Failed => "execution error",
+            Self::Interrupted => "interrupted",
             Self::Unknown => "unknown",
             Self::RolledBack => "rolled back",
         }
@@ -169,6 +172,7 @@ impl TurnStatus {
             Self::InProgress => "…",
             Self::Completed => "✓",
             Self::Failed => "✕",
+            Self::Interrupted => "⊘",
             Self::Unknown => "?",
             Self::RolledBack => "↶",
         }

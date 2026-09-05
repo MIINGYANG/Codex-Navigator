@@ -332,6 +332,47 @@ def main():
         assert hashlib.sha256(final_session.read_bytes()).digest() == final_digest
         print("PASS terminal: final-answer/phase-promotion/wide-narrow/main-identity/watching/read-only")
 
+        status_session = root / "rollout-status.jsonl"
+        failed_output = (json.dumps({"type": "response_item", "payload": {
+            "type": "function_call_output", "output": {"exit_code": 1, "output": "retry needed"}}}) + "\n").encode()
+        successful_output = (json.dumps({"type": "response_item", "payload": {
+            "type": "function_call_output", "output": {"exit_code": 0, "output": "retry finished"}}}) + "\n").encode()
+        status_session.write_bytes(
+            record({"type": "user_message", "message": "Retry then complete"})
+            + failed_output + successful_output
+            + record({"type": "task_complete", "last_agent_message": "USER REVIEWS THE OUTCOME"})
+            + record({"type": "user_message", "message": "No completion yet"}) + failed_output
+            + record({"type": "user_message", "message": "Interrupted turn"})
+            + record({"type": "turn_aborted"})
+            + record({"type": "user_message", "message": "Execution error turn"})
+            + record({"type": "turn_error"}))
+        status_digest = hashlib.sha256(status_session.read_bytes()).digest()
+        status_app = Navigator(binary, ["--session", str(status_session)], root)
+        status_app.expect("TIMELINE")
+        status_app.expect("01 ✓ !1")
+        status_app.expect("02 … !1")
+        status_app.expect("03 ⊘")
+        status_app.expect("04 ✕")
+        status_app.send("g")
+        status_app.send("f")
+        status_app.expect("USER REVIEWS THE OUTCOME")
+        for width in (70, 120):
+            status_app.resize(width, 32)
+            status_app.send("G")
+            status_app.expect("TURN STATUS · completed")
+            status_app.expect("1 activity errors")
+            status_app.expect("Completion is not a correctness verdict.")
+        for outcome in ("incomplete", "interrupted", "execution error"):
+            status_app.send("]")
+            status_app.send("G")
+            status_app.expect("TURN STATUS · " + outcome)
+        status_app.send("?")
+        status_app.expect("!N activity errors")
+        status_app.send("\x1b")
+        status_app.close()
+        assert hashlib.sha256(status_session.read_bytes()).digest() == status_digest
+        print("PASS terminal: lifecycle/activity-warning/retry/completion/abort/error/final-review/read-only")
+
         if args.real_session:
             path = args.real_session.resolve()
             app = Navigator(binary, ["--session", str(path)], root)

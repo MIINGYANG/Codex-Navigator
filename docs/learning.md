@@ -27,3 +27,9 @@
 **Key insight:** 底层支持的日志类型不必全部进入产品默认列表；用户通常想找自己的主任务，而非内部代理。将主会话过滤放在 Picker 发现入口，既统一启动/返回/刷新行为，又保留显式 ID/path 打开特殊来源的诊断能力。
 **Details / snippet:** v1.1.1 移除自动打开，列表严格只含 MAIN；--all 仅扩展日期。122 tests、fmt、clippy、release 与 5 组终端验收通过；旧版已复现唯一主会话自动打开的问题，新版 Enter 确认及显式子会话不重定向均通过。
 **Tags:** #ux #session #picker #regression #verification
+
+## 2026-09-06 — 生命周期、过程告警与答案正确性分层
+**Question:** 如何避免已结束的轮次被中途工具错误标成最终失败？
+**Key insight:** 轮次生命周期只依据明确结束、执行错误或中断事件；活动错误是独立事实，不能覆盖生命周期，也不能作为答案正确性的代理指标。失败后重试并结束应显示 ✓ !N，用户通过最终回复判断结果；晚到记录和 rollback 也必须保持这一分离。
+**Details / snippet:** v1.1.2 新增 10 项回归，全量 132 tests、fmt、clippy、release 和 6 组终端验收通过。当前核心可复用于未来 Web，但 HTTP/API、序列化适配和网页界面均尚未实现。
+**Tags:** #state #parser #ux #verification #architecture

@@ -20,7 +20,7 @@
 
 同时支持旧 event_msg.user_message / agent_message、response_item.message，以及 task_started / turn_started 等显式边界。明确边界内合并用户片段；无边界时按用户输入建立 Turn。去重结合输入来源、邻近距离、Turn 身份和真实 agent 活动，避免相同文本的不同提交被全局去重。
 
-未知结构跳过。完成状态只来自明确 completion，失败使用结构化 error、非零 exit code 或旧 shell 固定格式的退出码行；仅出现单词 error 不等于失败。rollback 有明确 turn_ids 或 num_turns 时标记，无法映射时保留 unknown。
+未知结构跳过。完成状态只来自明确 completion；轮次 execution error 来自 turn_error/error 或 completion 自带明确错误，中断来自 turn_aborted。工具的结构化 error、非零 exit code 或旧 shell 固定格式退出码行只累计活动错误，不改变生命周期；仅出现单词 error 不等于活动失败。rollback 有明确 turn_ids 或 num_turns 时标记，无法映射时保留 unknown。状态不判断结果正确性。
 
 所有 session 使用 File::open，只读解析。JSONL 的换行符作为提交标记，末尾无换行记录保留到后续补齐；首记录允许 BOM。默认单记录上限 4 MiB，超限流式丢弃到换行后继续。后台每批最多读取 4 MiB，使主界面在大文件加载期间保持可交互。
 
@@ -31,3 +31,7 @@
 本机主会话 `source` 为 `cli`；子会话为 `source.subagent.thread_spawn`，其中包含 parent_thread_id、depth、agent_path、agent_nickname、agent_role，顶层也可能提供父会话/代理信息。归一化同时兼容 source 字符串、对象与常见字段命名差异；未知来源保持 UNKNOWN，单独 forked_from_id 不推断为子代理。首条 metadata 即使缺少 id 也不会被继承历史覆盖。
 
 最终回复来自 AgentMessage 的 phase=final_answer 或 task_complete.last_agent_message；同一回复先无 phase、后补标记时升级原活动而不重复生成，已截断长回复使用有界镜像指纹辅助匹配。普通 agent_message、任务完成但缺少最后回复文本，不构成最终回复定位依据。
+
+## v1.1.2 生命周期检查
+
+只读抽样 12 份本机 rollout 的事件形状，观察到 51 条 event_msg.task_complete（含 turn_id / last_agent_message）和 1 条 event_msg.turn_aborted（含 turn_id，不含 last_agent_message）。未输出内容、会话 ID 或路径。解析同时测试事件包装和同名顶层变体；错误/中断载荷不根据 last_agent_message 补造最终回复，只有正常 completion 或显式 phase 构成定位依据。
