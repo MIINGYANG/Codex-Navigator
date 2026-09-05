@@ -1,0 +1,7 @@
+{"timestamp":"2026-09-06T10:00:00Z","type":"event_msg","payload":{"type":"turn_started","turn_id":"turn-a"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"第一段"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"第一段"}]}}
+{"type":"event_msg","payload":{"type":"user_message","message":"第二段"}}
+{"timestamp":"2026-09-06T10:00:30Z","type":"event_msg","payload":{"type":"turn_complete","turn_id":"turn-a","last_agent_message":"收到两段。"}}
+{"type":"event_msg","payload":{"type":"turn_started","turn_id":"turn-b"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"下一轮"}}

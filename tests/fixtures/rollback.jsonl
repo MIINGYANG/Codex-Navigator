@@ -1,0 +1,7 @@
+{"type":"event_msg","payload":{"type":"turn_started","turn_id":"a"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"保留"}}
+{"type":"event_msg","payload":{"type":"turn_complete","turn_id":"a"}}
+{"type":"event_msg","payload":{"type":"turn_started","turn_id":"b"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"撤回"}}
+{"type":"event_msg","payload":{"type":"turn_complete","turn_id":"b"}}
+{"type":"event_msg","payload":{"type":"thread_rolled_back","num_turns":1}}

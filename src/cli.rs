@@ -1,0 +1,31 @@
+use clap::{Parser, Subcommand};
+use std::path::PathBuf;
+
+#[derive(Debug, Parser)]
+#[command(
+    name = "codex-nav",
+    version,
+    about = "Read-only local navigator for Codex sessions"
+)]
+pub struct Cli {
+    /// Open a session by exact ID, unique ID prefix, or rollout file path.
+    #[arg(long, value_name = "SESSION_ID_OR_PATH")]
+    pub session: Option<String>,
+    /// Prefer sessions belonging to this directory (defaults to the current directory).
+    #[arg(long, value_name = "PATH")]
+    pub cwd: Option<PathBuf>,
+    /// Include the complete session history in the picker.
+    #[arg(long)]
+    pub all: bool,
+    /// Disable automatic updates; use r to refresh manually.
+    #[arg(long)]
+    pub no_watch: bool,
+    #[command(subcommand)]
+    pub command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum Command {
+    /// Diagnose local paths, session readability, watcher and clipboard availability.
+    Doctor,
+}

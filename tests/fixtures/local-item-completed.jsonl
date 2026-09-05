@@ -1,0 +1,7 @@
+{"type":"session_meta","payload":{"id":"synthetic-current","cwd":"/synthetic/project","cli_version":"0.153.2"}}
+{"type":"event_msg","payload":{"type":"turn_started","turn_id":"current-turn"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"private injected setup"},{"type":"input_text","text":"运行示例检查"}],"internal_chat_message_metadata_passthrough":{"turn_id":"current-turn","content_item_kinds":["environments.environment_context","user.text"]}}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"synthetic-current","turn_id":"current-turn","item":{"type":"UserMessage","id":"user-1","content":[{"type":"text","text":"运行示例检查","text_elements":[]}]}}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"synthetic-current","turn_id":"current-turn","item":{"type":"AgentMessage","id":"agent-1","content":[{"type":"Text","text":"开始检查。"}],"phase":"commentary"}}}
+{"type":"event_msg","payload":{"type":"item_completed","thread_id":"synthetic-current","turn_id":"current-turn","item":{"type":"CommandExecution","id":"command-1","command":["cargo","check"],"status":"completed","exit_code":0,"aggregated_output":"Finished","parsed_cmd":[{"type":"read","cmd":"read manifest","path":"Cargo.toml"}]}}}
+{"type":"event_msg","payload":{"type":"turn_complete","turn_id":"current-turn"}}

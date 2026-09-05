@@ -1,0 +1,4 @@
+{"type":"event_msg","payload":{"type":"user_message","message":"检查测试"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"检查测试"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"测试已完成。"}],"phase":"final_answer"}}
+{"type":"event_msg","payload":{"type":"agent_message","message":"测试已完成。","phase":"final_answer"}}

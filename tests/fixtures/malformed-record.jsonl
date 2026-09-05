@@ -1,0 +1,3 @@
+{this is intentionally malformed}
+{"type":"future_record","payload":{"anything":"ignored"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"坏行之后仍可浏览"}}
