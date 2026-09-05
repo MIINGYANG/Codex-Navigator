@@ -81,3 +81,9 @@
 **Key insight:** 清理需要覆盖所有相关提交和标签，仅从当前索引取消跟踪不够。先在仓库外保存完整 bundle 和旧远程哈希，逐提交保留非目标文件与元数据，再以精确 lease 原子推送，并用新克隆验证目标路径及其全部历史 blob 都不再可达。
 **Details / snippet:** 12 个提交、6 个注释标签完成映射与验证；7 个文档历史 blob 不再可达，新 SSH clone 和 fsck 通过。本地 Markdown 保留且精确忽略，未永久删除文件。Git 2.25.1 应使用 --stdin 隐式批量事务，而非较新的 start/commit 指令；旧克隆与托管缓存需要另行处理，不能承诺自动消失。
 **Tags:** #git #history #backup #privacy #verification
+
+## 2026-09-06 — 从干净初始 PATH 验证持久安装
+**Question:** 如何让安装后的 Navigator 在新终端中无需手动 source 就能启动？
+**Key insight:** 临时 source 只能证明当前进程可用；持久安装必须在用户实际 shell 的启动配置中加载正确路径。用户明确授权后，备份并幂等追加，再从不含安装目录的初始 PATH 启动新 shell，才能验证不是继承了 Agent 的临时环境。
+**Details / snippet:** 本机 Bash 配置仅新增一个存在检查加载块，原配置逐字保留；普通/登录/嵌套新 Bash 验证成功，源码外直接启动 TUI 并 q 退出通过。README 与 Agent 指令包含用户级配置授权、备份、幂等性和新终端验收；不上传私有 shell 备份。
+**Tags:** #installation #path #bash #agent #verification

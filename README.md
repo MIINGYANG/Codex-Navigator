@@ -19,9 +19,9 @@ codex-nav --web --port 0   # 网页版：在本机浏览器里阅读
 
 把[本项目仓库链接](https://github.com/MIINGYANG/Codex-Navigator)（或已有源码目录）和下面这句话交给你的编程 Agent：
 
-> 请阅读这个项目的 README 和 docs/agent-setup.md，帮我安装 Codex Navigator，确认新终端中可从任意目录直接运行 codex-nav 并完成自检，让我选择终端版或网页版，给我启动和退出方式；不要修改或上传我的 Codex 会话，修改 shell 配置、需要管理员权限或覆盖已有安装时先询问我。
+> 请阅读这个项目的 README 和 docs/agent-setup.md，帮我安装 Codex Navigator；我授权你备份并最小修改当前用户的 shell 启动配置，持久加入正确安装路径，验证新终端在任意目录直接运行 codex-nav 无需手动 source，再让我选择终端版或网页版并交付使用方式；不要修改或上传 Codex 会话，需要管理员权限、覆盖已有安装或其他系统变更时先询问我。
 
-你不需要提前了解 Rust；Agent 会先检查已有工具链和 PATH，再决定是否需要安装依赖。请使用本仓库源码，不要使用来源不明的同名安装包。
+你不需要提前了解 Rust；Agent 会检查已有工具链，完成安装和持久 PATH 配置，并验证新终端可用。上面的指令已授权必要的用户级 shell 配置修改，不需要每次手动 `source`。请使用本仓库源码，不要使用来源不明的同名安装包。
 
 ## 自己安装
 
@@ -44,7 +44,13 @@ export PATH="$HOME/.cargo/bin:$PATH"
 codex-nav --version
 ```
 
-若要新开的终端也能使用，请让 Agent 在你确认后将正确安装目录加入对应 shell 的 PATH；自定义 Cargo 安装目录时以实际路径为准。
+要让新终端自动生效，默认 rustup 安装且 `~/.cargo/env` 存在时，Bash 用户在 `~/.bashrc` 中添加一次以下内容（Zsh 使用实际的 `.zshrc`，默认在 `~/.zshrc`）：
+
+```bash
+[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+```
+
+保存后新开终端运行 `codex-nav --version`，无需再次手动 `source`。已有终端不会自动更新，可重新打开。其他 shell 或自定义安装目录应配置其实际 PATH；使用上面的 Agent 指令时，这些步骤由 Agent 完成。
 
 网页版会尝试自动打开浏览器，`--port 0` 自动选择空闲端口。安装时需要下载依赖，运行时不需要外网，也不需要 Node.js。
 
