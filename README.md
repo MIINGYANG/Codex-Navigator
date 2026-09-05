@@ -56,7 +56,7 @@ cd /path/to/project
 codex-nav
 ```
 
-按 `/` 输入关键字，Enter 打开结果。按 `G` 返回最新有效 Turn，`q` 或 `Ctrl+C` 退出。Navigator 不启动、不接管 Codex；退出不会影响另一个终端。
+按 `/` 输入关键字，Enter 打开结果。在正文中按 `g/G` 跳到顶部/底部；按 Tab 切回时间线后，`G` 返回最新有效 Turn。`q` 或 `Ctrl+C` 退出。Navigator 不启动、不接管 Codex；退出不会影响另一个终端。
 
 ## 快捷键
 
@@ -64,7 +64,7 @@ codex-nav
 |---|---|
 | `j/k`、`↓/↑` | Timeline 选择；Viewer 逐行滚动；Picker 选择 |
 | `[`、`]` | 任意主界面面板中选择上一/下一 Turn |
-| `g`、`G` | 第一轮 / 最新未 rollback 的轮 |
+| `g`、`G` | 时间线：第一轮 / 最新未 rollback 的轮；正文：当前轮顶部 / 底部 |
 | `Enter`、`Tab` | 打开/聚焦 Viewer；切换面板 |
 | `/` | 搜索 Prompt；Picker 中搜索标题、cwd、ID |
 | `Esc` | 取消搜索并恢复选择；回到 Timeline；Picker 中退出 |
@@ -75,6 +75,8 @@ codex-nav
 | `q`、`Ctrl+C` | 安全退出 |
 
 搜索模式下 `j/k` 是输入字符，使用方向键移动结果。没有剪贴板服务或在 SSH/headless 环境中复制失败，会显示短暂提示。复制不使用 OSC 52，不自动将内容写入终端宿主剪贴板。
+
+宽窄终端切换只改变布局；`j/k` 和 `g/G` 始终操作当前聚焦栏。正文中要切换到最新轮，先按 Tab 聚焦时间线，再按 G。
 
 ## 会话发现
 
@@ -150,3 +152,18 @@ cargo run --release --example benchmark
 ```
 
 参见 [架构](docs/architecture.md)、[验收结果](docs/qa.md)、[变更记录](CHANGELOG.md)。本地 Linux x86_64 完成构建和终端验收；其他平台使用跨平台依赖，但未经本次机器验证。
+
+## 本地开发时间线与版本
+
+仓库使用 `main` 分支，每个完成验收的迭代保留独立 commit，并通过版本标签标记发布点。Navigator 的时间线用于浏览 Codex 对话；Git 用于查看代码变更及版本演进。
+
+```bash
+# 查看提交时间线和版本标签
+git log --graph --decorate --oneline --all
+git tag -n
+
+# 对比本次修复与初始版本
+git diff v1.0.0..v1.0.1 -- src/app.rs
+```
+
+后续迭代遵循 [开发约定](AGENTS.md)，同步版本号、CHANGELOG 和验收记录。当前仅管理本地仓库，不自动推送到远程。

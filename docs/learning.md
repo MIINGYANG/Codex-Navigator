@@ -9,3 +9,9 @@
 **Key insight:** 记录大小、保留文本、索引身份字段和后台交付队列都需要明确上限；加载进度不能只依赖已提交记录的 revision，因为超大半行到 EOF 时可能没有新记录。搜索选择必须按 Turn 身份保留，文件截断或 rollback 后取消搜索也必须回到有效选择。
 **Details / snippet:** Phase 5–7 验收通过：91 tests、fmt、clippy、release、终端恢复、真实会话只读跟随。合成约 54 MiB / 4096 Turn 解析 173.28 ms；256 MiB 超大单行跳过成功，基准峰值 RSS 62,384 KiB。原始历史文件 hash 不变。
 **Tags:** #tui #streaming #memory #release #verification
+
+## 2026-09-06 — 按焦点导航与本地版本迭代
+**Question:** 如何修复宽窄终端切换后的正文 g/G，并保留后续开发的版本时间线？
+**Key insight:** 布局宽度和导航焦点是两个独立状态；g/G 应与 j/k 一样按焦点分发，正文首尾跳转不能触发 Turn 选择或清除历史提示。以现有版本建立基线 commit/tag，每次完成验收的改动保存独立提交，并同步语义版本号与 CHANGELOG。
+**Details / snippet:** v1.0.0 基线 e9fd58a；v1.0.1 修复新增 4 个导航回归测试，先复现后修复；全量 95 tests、fmt、clippy、release、伪终端宽窄切换及正文首尾验收通过。查看版本：git log --graph --decorate --oneline --all。
+**Tags:** #keyboard #focus #git #versioning #verification

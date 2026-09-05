@@ -385,12 +385,18 @@ impl App {
             KeyCode::Home => self.viewer_scroll = 0,
             KeyCode::End => self.viewer_scroll = usize::MAX,
             KeyCode::Char('g') => {
-                if self.session.as_ref().is_some_and(|s| !s.turns.is_empty()) {
+                if self.focus == Focus::Viewer {
+                    self.viewer_scroll = 0;
+                } else if self.session.as_ref().is_some_and(|s| !s.turns.is_empty()) {
                     self.select(Some(0));
                 }
             }
             KeyCode::Char('G') => {
-                self.select(self.session.as_ref().and_then(Session::latest_active))
+                if self.focus == Focus::Viewer {
+                    self.viewer_scroll = usize::MAX;
+                } else {
+                    self.select(self.session.as_ref().and_then(Session::latest_active));
+                }
             }
             KeyCode::Char('c') => {
                 if let Some(turn) = self.selected_turn() {

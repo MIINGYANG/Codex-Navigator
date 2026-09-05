@@ -162,7 +162,10 @@ def main():
         session.write_bytes(record({"type": "user_message", "message": "第一轮 多行问题\n检查项目"})
                             + record({"type": "agent_message", "message": "可见回复"})
                             + record({"type": "task_complete"})
-                            + record({"type": "user_message", "message": "第二轮 检查 authentication"}))
+                            + record({"type": "user_message", "message": "第二轮 检查 authentication"})
+                            + record({"type": "agent_message", "message": "\n".join(
+                                ["Synthetic long viewer line " + str(n) for n in range(100)]
+                                + ["TURN TWO END"])}))
         app = Navigator(binary, ["--session", str(session)], root)
         app.expect("第二轮")
         app.send("g")
@@ -178,6 +181,15 @@ def main():
         app.output.clear()
         app.resize(122, 32)
         app.expect("TURN 02")
+        for width in (70, 122, 70, 120):
+            app.resize(width, 32)
+            app.send("g")
+            app.expect("USER")
+            app.expect("TURN 02")
+            app.send("G")
+            app.expect("TURN TWO END")
+            app.expect("TURN 02")
+            app.expect("+1 new turn")
         app.send("?")
         app.expect("KEYBOARD HELP")
         app.send("\x1b")
@@ -190,6 +202,7 @@ def main():
         app.resize(1, 1)
         app.pump()
         app.resize(120, 32)
+        app.send("\t")
         app.send("G")
         app.output.clear()
         app.resize(121, 32)
@@ -197,7 +210,7 @@ def main():
         digest = hashlib.sha256(session.read_bytes()).digest()
         app.close()
         assert hashlib.sha256(session.read_bytes()).digest() == digest
-        print("PASS terminal: navigation/search/history/live/resize/help/clipboard/q/restore/read-only")
+        print("PASS terminal: navigation/search/history/live/resize/viewer-gG/help/clipboard/q/restore/read-only")
 
         app = Navigator(binary, ["--session", str(session), "--no-watch"], root)
         app.expect("STATIC")

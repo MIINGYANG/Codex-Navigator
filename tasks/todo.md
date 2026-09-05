@@ -26,3 +26,18 @@
 
 发布文件：target/release/codex-nav（1.0.0）。文档：README.md、docs/architecture.md、docs/session-format-notes.md、docs/qa.md。详细测试与平台限制记录在 docs/qa.md。
 
+## v1.0.1 — 本地版本历史与正文首尾跳转
+
+需求已确认：g/G 按焦点生效；时间线继续选择第一轮/最新轮，正文跳到当前轮顶部/底部，宽窄布局切换后行为一致。建立本地 main 分支，以独立 commit 和版本标签保留迭代历史。
+
+- [x] 初始化 Git，提交现有 v1.0.0 基线并建立标签。
+- [x] 补充宽窄切换与正文 g/G 回归测试，再修复按键分发。
+- [x] 更新帮助、使用文档、CHANGELOG 和版本号至 1.0.1。
+- [x] 通过 fmt、clippy、全量测试、release 与终端交互验收。
+- [x] 记录验收与经验，核对 v1.0.1 提交内容和版本标签命名。
+
+### 本次验收结果
+
+基线 commit e9fd58a，标签 v1.0.0。新增测试先在旧实现上复现 g/G 错误切换 Turn，修复后 4 个导航回归测试全部通过。全量 95 tests、fmt、clippy、release 构建和真实伪终端宽窄切换验收均通过。
+
+正文 g/G 只改变当前正文滚动位置，保留所选 Turn 和新增消息提示；时间线 g/G 语义不变。版本号、帮助、README、使用指南、CHANGELOG 与本地迭代约定均已同步。交付通过独立修复 commit 和 v1.0.1 标签记录，提交历史可用 git log --graph --decorate --oneline --all 查看。

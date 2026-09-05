@@ -57,4 +57,15 @@ cargo install --path . --locked
 - 超大记录与总可见文本按 README 所述预算跳过/截断，不承诺展示原始 rollout 全部内容。
 - 未知协议事件忽略；缺乏可靠完成证据时保持中性状态。rollout 不是稳定官方 API。
 - 无 newline 的最后一行等待后续提交，包括静态文件。复杂原地改写若同时保留身份、前缀、长度与时间戳，无法可靠检测。
-- 当前目录不是 Git 仓库且没有 GitHub remote，因此未添加或发布 GitHub Release workflow；本地 release binary 已完成。
+- v1.0.0 验收时尚未初始化 Git 或配置 GitHub remote，因此当时未添加或发布 GitHub Release workflow；本地 release binary 已完成。
+
+## v1.0.1 — 2026-09-06
+
+修复正文 g/G 在宽窄布局切换后仍错误选择 Turn 的问题。实现按焦点导航，同步帮助和状态栏提示，并初始化 main 分支的本地版本历史。
+
+- 新增 4 个导航回归测试：先验证旧实现失败，再验证正文顶部/底部可见、历史选择及提示保留、宽→窄→宽、Shift+G、空/短/极小视口、搜索输入。
+- 全量 `cargo test`：95 passed，0 failed。
+- `cargo fmt --check`、`cargo clippy --all-targets --all-features -- -D warnings`、`cargo build --release` 均通过。
+- 终端验收脚本增加长正文场景；70/122/70/120 列反复切换后，g 显示 USER，G 显示正文末尾，始终保留 TURN 02 和 +1 new turn。
+- `target/release/codex-nav --version` 返回 1.0.1。退出旧 Navigator 后重新运行该 binary 即可使用新版本。
+- 本地版本标签：v1.0.0 基线、v1.0.1 修复。未配置远程、未执行 push；仍不修改任何 Codex 数据。

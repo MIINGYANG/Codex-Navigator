@@ -20,7 +20,9 @@ fn cli_help_version_and_noninteractive_message() {
     }
     let version = command(&root).arg("--version").output().unwrap();
     assert!(version.status.success());
-    assert!(String::from_utf8(version.stdout).unwrap().contains("1.0.0"));
+    assert!(String::from_utf8(version.stdout)
+        .unwrap()
+        .contains(env!("CARGO_PKG_VERSION")));
     let tui = command(&root).output().unwrap();
     assert!(!tui.status.success());
     assert!(String::from_utf8(tui.stderr)

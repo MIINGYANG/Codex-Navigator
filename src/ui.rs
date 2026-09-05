@@ -80,9 +80,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
     if app.new_turns > 0 {
         status.push(format!(
-            "+{} new turn{} · G latest",
+            "+{} new turn{} · {} latest",
             app.new_turns,
-            if app.new_turns == 1 { "" } else { "s" }
+            if app.new_turns == 1 { "" } else { "s" },
+            if app.focus == Focus::Viewer {
+                "Tab G"
+            } else {
+                "G"
+            }
         ));
     }
     if let Some(s) = &app.session {
@@ -124,6 +129,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         " ↑/↓ result  Enter open  Esc cancel"
     } else if app.picker {
         " / search  ↑/↓ choose  Enter open  r refresh  ? help  q quit"
+    } else if app.focus == Focus::Viewer {
+        " g/G top/end  [/] turn  Tab timeline  / search  c copy  ? help  q quit"
     } else {
         " / search  [/] turn  G latest  Tab focus  c copy  s sessions  ? help  q quit"
     };
@@ -398,7 +405,8 @@ fn help(frame: &mut Frame, area: Rect) {
     let lines = [
         "↑/k ↓/j     Timeline: select turn · Viewer: scroll",
         "[ / ]       Previous / next turn from either pane",
-        "g / G       First / latest active turn",
+        "g / G       Timeline: first / latest active turn",
+        "            Viewer: top / bottom of the current turn",
         "Tab         Switch timeline / viewer (also in narrow terminals)",
         "Enter       Focus viewer / open picker or search result",
         "PgUp/PgDn   Scroll viewer by a page",
