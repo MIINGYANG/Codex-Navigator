@@ -57,3 +57,9 @@
 **Key insight:** README 应提供短入口，把环境检查、安装与验收细节放进可引用的 Agent 指南。交付必须区分构建成功、HTTP 可用、浏览器交互验收和服务仍在运行；没有会话是正常空态，后台进程不能保留时需明确交回用户终端启动。
 **Details / snippet:** README 精简为产品介绍、一句话指令、手动安装和必要限制；新增 docs/agent-setup.md。相对链接、CLI 参数、157 项 Rust 测试、18 项前端测试与 release build 复验通过；仅文档变更，不修改版本或发布远程资源。
 **Tags:** #readme #installation #agent #verification #ux
+
+## 2026-09-06 — 终端与网页是同一产品的两种入口
+**Question:** 如何避免简化安装文档后，用户误以为 Navigator 只能在网页使用？
+**Key insight:** 仅在命令清单中提到终端版不够，首屏和 Agent 安装指令都应保留模式选择。终端版需要交互式终端，交付启动/退出命令；网页版才需要服务地址、令牌和后台生命周期说明。
+**Details / snippet:** README 首屏并列 codex-nav 与 codex-nav --web --port 0；Agent 指南按模式分支验收。链接、围栏、CLI 与源码核对及 7 项相关测试通过，仅修改文档。
+**Tags:** #readme #tui #web #onboarding #verification
