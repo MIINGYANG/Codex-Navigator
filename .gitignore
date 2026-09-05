@@ -2,3 +2,5 @@
 /node_modules/
 *.log
 __pycache__/
+/Codex-Navigator-User-Guide.md
+/Codex-Navigator-Product-Spec-and-Implementation-Plan.md

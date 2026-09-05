@@ -93,6 +93,6 @@ rustc --version
 
 ## 更多
 
-[Agent 安装与自检](docs/agent-setup.md) · [详细使用指南](Codex-Navigator-User-Guide.md) · [版本记录](CHANGELOG.md)
+[Agent 安装与自检](docs/agent-setup.md) · [版本记录](CHANGELOG.md)
 
 [MIT License](LICENSE)。独立社区工具，与 OpenAI 官方项目无隶属关系。
