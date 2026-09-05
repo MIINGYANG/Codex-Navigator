@@ -1,229 +1,60 @@
 # Codex Navigator
 
-Codex CLI 的本地只读 Sidecar。通过终端或网页快速定位历史 Prompt，浏览回复与命令，并实时跟随正在增长的会话。独立社区工具，与 OpenAI 官方项目无隶属关系。
+在本地网页或终端中，快速找回你的 Codex 历史问题与回复。
 
-```text
- Codex Navigator · WATCHING · MAIN · ~/project · 12 turns
-┌ TIMELINE ─────────────────┬ TURN 12 · incomplete ──────────────────┐
-│  10 ✓ 分析项目结构        │ USER                                    │
-│  11 ✓ 检查配置            │ 帮我跑一下测试                          │
-│▸ 12 … 帮我跑一下测试      │                                         │
-│                          │ ACTIVITY · command                      │
-│                          │ $ cargo test                            │
-│                          │ OUTPUT                                  │
-│                          │ exit code 0                             │
-└──────────────────────────┴─────────────────────────────────────────┘
- / search  [/] turn  G latest  Tab focus  c copy  s sessions  ? help  q quit
-```
+- **找会话**：默认只列主会话，按项目、标题或 ID 搜索。
+- **读过程**：浏览问题、工具活动和最终回复，支持复制。
+- **跟进进度**：实时更新，翻阅历史时不打断阅读位置。
 
-## 功能
+不修改 Codex、不上传会话，不需要额外账号或 API Key。
 
-- 启动先进入可搜索的主会话 Session Picker，当前目录相关会话优先，确认后打开。
-- 按 Turn 浏览完整 Prompt、公开回复、工具调用、文件活动和可靠失败信息。
-- 中文、大小写无关 substring 与英文 fuzzy 搜索；同分时优先较新的 Turn。
-- 后台流式加载，实时增量更新；查看历史时保留选择，显示 `+N new turns`。
-- 宽终端双栏；不足 100 列时按 Tab 切换单栏。
-- `--web` 启动 B「专注阅读」本机网页，主会话入口、轻量目录、宽正文与最终回复书签；资源内嵌，无需 Node 或网络服务。
-- 支持复制、Viewer 滚动、帮助、手动刷新和诊断。
-- 容忍格式变动、坏行、BOM、半行、超大图片记录和文件替换。
+## 让你的 Agent 帮你安装
 
-## 安装
+把**本项目的源码目录**（或发布后的仓库链接）和下面这句话交给你的编程 Agent：
 
-需要 Rust 1.88 或更新版本、平台 C 链接器。首次构建需要获取 Cargo 依赖；运行程序无需网络。
+> 请阅读这个项目的 README 和 docs/agent-setup.md，按指南在我的机器上安装 Codex Navigator、运行自检并启动本地 Web 界面，最后给我访问地址和停止方式；不要修改或上传我的 Codex 会话，遇到需要管理员权限或覆盖已有安装时先询问我。
+
+你不需要提前了解 Rust；Agent 会检查依赖。当前仓库尚未配置公开下载地址，请先将源码交给 Agent，不要使用来源不明的同名安装包。
+
+## 自己安装
+
+目前已验证 Linux x86_64；macOS / Windows 尚未完成实机验证。源码构建需要 Rust 1.88+ 和 C 链接器，建议使用当前 stable Rust。
+
+拿到源码后，在项目目录运行：
 
 ```bash
-cargo build --release --locked
-./target/release/codex-nav --version
-
-# 可选：安装到用户 Cargo bin
 cargo install --path . --locked
+codex-nav --web --port 0
 ```
 
-若 cargo 未加入 PATH，先运行 `. "$HOME/.cargo/env"`。可执行文件为 Linux/macOS 的 `target/release/codex-nav` 或 Windows 的 `target/release/codex-nav.exe`。
+浏览器会自动打开，`--port 0` 自动选择空闲端口。若提示找不到 `codex-nav`，确认 Cargo 的 bin 目录已加入 PATH（Linux 通常为 `~/.cargo/bin`）。安装时需要下载依赖，运行时不需要外网，也不需要 Node.js。
 
-## 快速开始
+## 怎么用
 
-终端 A 正常使用 Codex：
+1. 在你平时使用 Codex 的机器上启动 Navigator。
+2. 选择主会话，搜索并点击想回看的问题。
+3. 点击“最终回复”或按 `f` 定位结果，展开活动查看执行过程。
+
+常用快捷键：`/` 搜索、`j/k` 移动、`g/G` 当前区域首尾、`f` 最终回复、`s` 返回会话列表、`?` 帮助。点击目录或正文后，导航键会操作对应区域。
 
 ```bash
-cd /path/to/project
-codex
+codex-nav                              # 终端模式
+codex-nav --web --port 0 --all          # 网页查看更早的主会话
+codex-nav --web --port 0 --no-open      # 不自动打开浏览器，打印访问地址
+codex-nav doctor                       # 环境诊断
 ```
 
-终端 B 打开 Navigator：
+启动 Web 后请保留启动它的终端，按 `Ctrl+C` 停止；关闭网页不会停止服务，停止 Navigator 不影响 Codex。如果由 Agent 后台启动，让它告诉你如何停止该进程。
 
-```bash
-cd /path/to/project
-codex-nav
-```
+## 使用前知道这些
 
-启动后先选择主会话：`j/k` 或方向键移动，Enter 打开，即使只有一个候选也不会自动进入。`/` 搜索会话；打开后 `/` 搜索 Prompt。在正文中按 `g/G` 跳到顶部/底部；按 Tab 切回时间线后，`G` 返回最新有效 Turn。`q` 或 `Ctrl+C` 退出。Navigator 不启动、不接管 Codex；退出不会影响另一个终端。
+- **读取你自己的数据**：默认读取 `~/.codex`，也支持 `CODEX_HOME`。没有会话时显示空列表；找不到旧记录可用 `--all`。
+- **只在本机访问**：使用程序打印的完整地址，其中带有临时令牌，不要分享。不能直接从其他电脑或手机连接。
+- **不判断答案正确性**：正常结束与活动错误分开显示，最终结果由你阅读回复判断。
+- **长历史可能省略**：为控制内存，部分旧正文会显示省略提示，原文件不变；没有可靠标记时不会猜测最终回复。Markdown 为安全子集，不加载图片附件。
 
-## 快捷键
+## 更多
 
-| 按键 | 行为 |
-|---|---|
-| `j/k`、`↓/↑` | Timeline 选择；Viewer 逐行滚动；Picker 选择 |
-| `[`、`]` | 任意主界面面板中选择上一/下一 Turn |
-| `g`、`G` | 时间线：第一轮 / 最新未 rollback 的轮；正文：当前轮顶部 / 底部 |
-| `f` | 定位当前轮最后一条明确标记的最终回复；宽窄切换保持位置 |
-| `Enter`、`Tab` | 打开/聚焦 Viewer；切换面板 |
-| `/` | 搜索 Prompt；Picker 中搜索标题、cwd、ID、身份、父会话、代理名 |
-| `Esc` | 取消搜索并恢复选择；回到 Timeline；Picker 中退出 |
-| `PgUp/PgDn`、`Home/End` | Viewer 翻页 / 顶部 / 底部 |
-| `c`、`C` | 复制 Prompt / 该 Turn 当前保留的全部可见文本 |
-| `r`、`s` | 增量刷新 / 返回 Session Picker |
-| `?` | 帮助 |
-| `q`、`Ctrl+C` | 安全退出 |
+[Agent 安装与自检](docs/agent-setup.md) · [详细使用指南](Codex-Navigator-User-Guide.md) · [验收记录](docs/qa.md) · [架构与限制](docs/architecture.md) · [版本记录](CHANGELOG.md)
 
-搜索模式下 `j/k` 是输入字符，使用方向键移动结果。没有剪贴板服务或在 SSH/headless 环境中复制失败，会显示短暂提示。复制不使用 OSC 52，不自动将内容写入终端宿主剪贴板。
-
-宽窄终端切换只改变布局；`j/k` 和 `g/G` 始终操作当前聚焦栏。正文中要切换到最新轮，先按 Tab 聚焦时间线，再按 G。
-
-## 会话发现
-
-优先使用 `CODEX_HOME`；未设置则使用用户目录下 `.codex`。读取 `sessions/YYYY/MM/DD/rollout-*.jsonl`，默认扫描最近 7 天。启动、`s` 返回及 `r` 刷新均进入主会话 Picker，不再自动打开。列表只显示明确识别为 MAIN 的会话；SUBAGENT 和 UNKNOWN 均隐藏。当前 cwd 精确匹配优先，父/子目录其次，同级别按更新时间排序；无匹配时展示近期主会话。`--all` 扩展到全部日期，仍只列主会话。
-
-Picker 显示主会话标题、目录、短 ID、轮数和更新时间。需要检查非主会话时，可显式使用 `--session ID/PATH` 打开其独立日志；不会重定向父会话。缺失或未知来源不猜测身份；单独 fork 不等于子代理。会话头部仍显示真实身份。`WATCHING` 仅表示 Navigator 正在监控文件，不表示 Codex 正在执行任务；`STATIC` 表示未启用监控。
-
-按 `f` 定位当前轮的 `FINAL ANSWER`，不会切换到最新轮或清除历史新增提示。最终回复只依据 `phase=final_answer` 或 completion 的 `last_agent_message`；缺少标记或正文已淘汰时会提示不可定位，不把最后一条进度消息当最终答案。
-
-`session_index.jsonl` 只补充标题和时间，索引缺失或过期不影响从 rollout 恢复。发现阶段每个文件最多读取 1 MiB，Picker 的大文件轮数先显示 `?`，随后后台补齐；可以立即选择打开，无需等候统计。近期目录为空时会有限回退到最近有数据的日期目录。
-
-## CLI
-
-```bash
-codex-nav
-codex-nav --session SESSION_ID_OR_UNIQUE_PREFIX
-codex-nav --session /path/to/rollout.jsonl
-codex-nav --cwd /path/to/project
-codex-nav --all
-codex-nav --no-watch
-codex-nav --web
-codex-nav --web --port 8765 --no-open
-codex-nav doctor
-codex-nav --help
-codex-nav --version
-```
-
-`--no-watch` 禁用自动更新，`r` 仍可增量读取。TUI 需要交互终端；Web 模式、`doctor` 和 `--help` 不需要。
-
-可选配置路径：Linux `~/.config/codex-nav/config.toml`（尊重 XDG_CONFIG_HOME）；macOS `~/Library/Application Support/codex-nav/config.toml`；Windows 平台配置目录下 `codex-nav/config.toml`。应用不会自动创建配置。
-
-```toml
-preview_width = 36
-watch = true
-recent_days = 7
-max_record_bytes = 4194304
-```
-
-## 隐私与只读保证
-
-Navigator 只读本机 Codex session，不上传数据，不要求账号或 OpenAI API key，不包含 AI API、云服务或 telemetry。不会修改 Codex 源码、配置、rollout 或 session_index，不支持 resume、fork、回滚、删除或发送 Prompt。配置也只读。
-
-所有显示内容都会过滤 ANSI/OSC/control 字符。解析器不展示 reasoning、隐藏推理、加密内容或压缩上下文。诊断只打印环境可用性及路径，不打印认证信息、完整环境或原始会话。
-
-会话本身可能包含敏感代码、命令和路径；不要随意分享 raw rollout。按 `c/C` 是向系统剪贴板复制本地文本的明确操作。
-
-## 排错与兼容性
-
-先运行 `codex-nav doctor`。找不到会话时确认 CODEX_HOME 与 Codex 一致，尝试 `--all` 或直接指定文件。不可读文件会提示，不会尝试修复权限或改写数据。
-
-当前已按本机 Codex 0.153.2 真实格式验证，并用合成测试覆盖旧 `event_msg.user_message`、新 `item_completed`、显式边界与无边界格式。详细记录见 [session-format-notes](docs/session-format-notes.md)。rollout 不是稳定 API，未知 record 会跳过。
-
-轮次生命周期与过程警告分开显示，均不判断答案是否正确：
-
-| 标记 | 含义 |
-|---|---|
-| `✓` | 收到正常完成事件，不代表任务结果正确 |
-| `✕` | 收到明确的轮次执行错误，不是某个工具失败 |
-| `⊘` | 收到轮次中断事件 |
-| `…` | 尚未记录结束事件，不保证模型仍在运行 |
-| `?` | 状态未知 |
-| `↶` | 已 rollback |
-| `!N` | 独立的活动错误记录数，与上述生命周期并列 |
-
-例如 `✓ !1` 表示该轮正常结束，过程中检测到过一次活动错误；失败后重试成功也保留警告。晚到的工具错误不会把已完成轮改成失败。错误数是已检测的活动记录数，不代表未解决问题数。退出码 0 不推断“所有测试通过”，最终结果由用户按 `f` 查看最终回复后判断。
-
-超大图片记录默认超过 4 MiB 即流式跳过。每轮 Prompt 最多 256 KiB，独立正文预算 16 MiB；工具输出不会挤占 Prompt。活动正文预算 48 MiB，单条回复/工具正文最多 64 KiB（另有少量截断标记/字段，均计入活动预算）。预算用满时淘汰较早正文，保留新输入与新回复；旧 Prompt 保留预览供搜索/复制，正文明确提示省略，旧活动合并显示省略提示。搜索不会继续命中已淘汰正文。总正文预算 64 MiB 不等于进程 RSS，索引、预览、模型和后台更新另占内存。
-
-仍限制 100,000 Turn / 200,000 活动；超过条数上限的后续内容不再进入模型。省略计数会显示。原文件不变，完整文本仍在 rollout；本版本不从磁盘按需恢复历史全文。只有换行结束的 JSONL 才提交，静态文件末尾无换行也会等待。
-
-文件变化使用通知和 100 ms 轮询后备。替换/截断会安全重载；无法识别刻意保持身份、前缀、长度和时间戳的原地重写。退出 raw mode 使用恢复 guard，panic 也会恢复；像所有终端应用一样，SIGKILL 无法执行清理，可在 shell 运行 `reset`。
-
-## 开发与验证
-
-```bash
-cargo fmt --check
-cargo clippy --all-targets --all-features -- -D warnings
-cargo test
-cargo build --release
-
-# Web 开发检查；仅开发时需要 Node 22.13+，运行 binary 不需要
-npm ci --ignore-scripts
-npm run format:check
-npm run lint
-npm test
-```
-
-所有测试使用合成 fixture / 临时目录，不修改真实 Codex 数据。Linux 终端集成验收：
-
-```bash
-python3 scripts/terminal_qa.py target/release/codex-nav
-
-# 真实浏览器验收（需要已连接的本机 web-access CDP Proxy :3456）
-node scripts/web_qa.mjs target/release/codex-nav
-node scripts/web_qa.mjs target/release/codex-nav --no-watch
-```
-
-只读统计与性能工具（不输出 Prompt）：
-
-```bash
-cargo run --release --example audit -- /path/to/rollout.jsonl
-cargo run --release --example benchmark
-```
-
-参见 [架构](docs/architecture.md)、[验收结果](docs/qa.md)、[变更记录](CHANGELOG.md)。本地 Linux x86_64 完成构建和终端验收；其他平台使用跨平台依赖，但未经本次机器验证。
-
-## Web 查看
-
-```bash
-# 启动并打开默认浏览器
-./target/release/codex-nav --web
-
-# 不自动打开；复制终端打印的完整地址到本机浏览器
-./target/release/codex-nav --web --no-open
-
-# 端口被占用时自动选择空闲端口；查看全部日期的主会话
-./target/release/codex-nav --web --port 0 --all
-
-# 直接阅读指定会话，禁用自动更新
-./target/release/codex-nav --web --session SESSION_ID --no-watch
-```
-
-默认监听 `127.0.0.1:8765`。启动地址带有随机访问令牌，请使用终端打印的完整 URL，而不是只输入端口地址。令牌只对本次进程有效，页面读取后从地址栏移除，保存在当前标签页的 sessionStorage 以支持刷新；没有账号、登录或云服务。不要分享带令牌的地址。
-
-默认先选主会话，支持标题/目录/ID 搜索与近期/全部日期切换。打开后左侧搜索 Prompt，正文展示输入、折叠活动和可靠标记的最终回复；长目录和活动分页加载。`f` 定位最终回复，`s` 返回列表，`r` 刷新，`?` 查看帮助。`g/G` 按当前焦点操作目录首尾或正文首尾，手机窄屏保持语义。输入框内不会劫持文字快捷键。复制操作只复制已保留文本，不补读已省略历史。
-
-页面定期检查轻量元数据，仅变化时更新内容；查看历史时保留选择与阅读位置，出现新轮次时显示提示。文件监控不代表 Codex 正在执行。活动警告与执行状态独立，最终结果由用户阅读回复判断。`--no-watch` 下使用刷新按钮或 `r` 手动读取。
-
-每页最多 100 轮；活动每次读取 8 条，页面最多保留 64 条活动节点，更多内容通过前后组查看，整轮复制不受当前活动页限制。服务最多缓存两个已打开会话，切回已淘汰会话会重新解析；单个进程最多登记 20,000 个会话，达到上限会提示。沿用终端的正文内存预算，不恢复已省略历史全文。Markdown 支持标题、列表、代码、引用与安全链接，复杂表格、公式等可能显示为原始文本，不加载图片附件。
-
-关闭标签页不停止服务；回到启动终端按 `Ctrl+C` 停止 Navigator，不影响 Codex。浏览器打不开时使用 `--no-open` 并手动访问地址。Web 不提供修改、发送 Prompt、删除或下载任意本机文件的接口。
-
-仅面向本机可信环境，不支持公网发布、局域网共享或远程手机访问；窄屏支持是布局适配，不表示开放网络监听。所有网页资源随 binary 提供，没有 CDN、外部字体或自动加载远程图片。Markdown 为安全阅读子集，不执行日志里的 HTML 或脚本。详见 [Web 支持边界](docs/architecture.md#web-支持边界)。
-
-## 本地开发时间线与版本
-
-仓库使用 `main` 分支，每个完成验收的迭代保留独立 commit，并通过版本标签标记发布点。Navigator 的时间线用于浏览 Codex 对话；Git 用于查看代码变更及版本演进。
-
-```bash
-# 查看提交时间线和版本标签
-git log --graph --decorate --oneline --all
-git tag -n
-
-# 对比本次修复与初始版本
-git diff v1.0.0..v1.0.1 -- src/app.rs
-```
-
-后续迭代遵循 [开发约定](AGENTS.md)，同步版本号、CHANGELOG 和验收记录。当前仅管理本地仓库，不自动推送到远程。
+[MIT License](LICENSE)。独立社区工具，与 OpenAI 官方项目无隶属关系。

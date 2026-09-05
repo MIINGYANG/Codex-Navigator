@@ -51,3 +51,9 @@
 **Key insight:** 模拟终端不能在同尺寸重排时自行清空屏幕，因为真实应用可能只增量重绘。重排信号与紧随其后的按键也不应被验收脚本塞入同一事件批次；等待实际帧结束比任意延时可靠，并保留原功能断言。
 **Details / snippet:** scripts/terminal_qa.py 加入分片光标帧结束与同尺寸保留断言，重排完成后才继续发键；六组终端集成连续五次及最终复验通过，不改变 Rust/TUI 逻辑。
 **Tags:** #testing #terminal #resize #race #verification
+
+## 2026-09-06 — 一句话入口与可验证的 Agent 安装交付
+**Question:** 如何让用户把一句话交给自己的 Agent，就能安装、自检并打开 Navigator？
+**Key insight:** README 应提供短入口，把环境检查、安装与验收细节放进可引用的 Agent 指南。交付必须区分构建成功、HTTP 可用、浏览器交互验收和服务仍在运行；没有会话是正常空态，后台进程不能保留时需明确交回用户终端启动。
+**Details / snippet:** README 精简为产品介绍、一句话指令、手动安装和必要限制；新增 docs/agent-setup.md。相对链接、CLI 参数、157 项 Rust 测试、18 项前端测试与 release build 复验通过；仅文档变更，不修改版本或发布远程资源。
+**Tags:** #readme #installation #agent #verification #ux

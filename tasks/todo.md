@@ -1,5 +1,17 @@
 # Codex Navigator v1.0 实施计划
 
+## 用户 README — 一句话交给 Agent 安装自检
+
+本次仅改文档，保留 v1.2.0 二进制与标签，不新增安装器、不发布远程仓库。README 面向使用者，详细步骤移到 Agent 安装指南；缺少公开仓库地址时以用户提供源码目录为入口。
+
+- [x] 精简 README：一句话 Agent 指令、手动启动、核心使用和必要限制。
+- [x] 提供可执行的 Agent 安装/测试指南，明确平台、权限、只读、空态和启动验收。
+- [x] 检查相对链接及实际命令，记录反馈/验证，准备独立文档 commit，不 push。
+
+### README 验收结果
+
+README 与 Agent 指南的相对链接、代码围栏及 git diff --check 通过；参数与 release binary 的 --help / --version 一致。复跑 157 项 Rust 测试（含 HTTP 集成）、18 项前端测试及 release build 全部通过。本次 shell 未将 Cargo 加入 PATH，使用已安装 Cargo 的绝对路径完成验证，未改动系统配置；指南已覆盖依赖与 PATH 检查。此前本机临时目录安装及脱离源码运行检查通过，本次不重复全局安装、不新增浏览器交互验收。仅提交文档，保留 v1.2.0 与既有标签；公开下载入口仍需仓库所有者发布后提供。
+
 ## v1.2.0 — B 专注阅读 Web 正式版
 
 用户已选择 B 并授权推进。实施约定见 docs/web-implementation.md；确认既有 CLI/解析器/只读 worker 后并行实施，最后集成验收，不再停在预览。
