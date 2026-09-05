@@ -63,3 +63,9 @@
 **Key insight:** 仅在命令清单中提到终端版不够，首屏和 Agent 安装指令都应保留模式选择。终端版需要交互式终端，交付启动/退出命令；网页版才需要服务地址、令牌和后台生命周期说明。
 **Details / snippet:** README 首屏并列 codex-nav 与 codex-nav --web --port 0；Agent 指南按模式分支验收。链接、围栏、CLI 与源码核对及 7 项相关测试通过，仅修改文档。
 **Tags:** #readme #tui #web #onboarding #verification
+
+## 2026-09-06 — 独立命令安装与 PATH 验收
+**Question:** 用户是否可以安装后在任意目录运行 Navigator，而不进入源码目录？
+**Key insight:** cargo install 安装的是独立二进制，Web 资源已内嵌；日常使用不依赖源码工作目录。命令能否直接输入取决于 PATH，应区分当前进程的临时配置与用户新终端的持久配置，后者需要针对实际 shell 授权设置和验证。
+**Details / snippet:** 已在 /tmp 使用临时安装命令通过 --version / --help；README 增加任意目录启动与 PATH 说明，Agent 指南增加新终端验收要求。未修改用户 shell，未进行全局安装。
+**Tags:** #installation #path #shell #readme #verification
