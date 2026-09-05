@@ -17,19 +17,21 @@ codex-nav --web --port 0   # 网页版：在本机浏览器里阅读
 
 ## 让你的 Agent 帮你安装
 
-把**本项目的源码目录**（或发布后的仓库链接）和下面这句话交给你的编程 Agent：
+把[本项目仓库链接](https://github.com/MIINGYANG/Codex-Navigator)（或已有源码目录）和下面这句话交给你的编程 Agent：
 
 > 请阅读这个项目的 README 和 docs/agent-setup.md，帮我安装 Codex Navigator，确认新终端中可从任意目录直接运行 codex-nav 并完成自检，让我选择终端版或网页版，给我启动和退出方式；不要修改或上传我的 Codex 会话，修改 shell 配置、需要管理员权限或覆盖已有安装时先询问我。
 
-你不需要提前了解 Rust；Agent 会检查依赖。当前仓库尚未配置公开下载地址，请先将源码交给 Agent，不要使用来源不明的同名安装包。
+你不需要提前了解 Rust；Agent 会先检查已有工具链和 PATH，再决定是否需要安装依赖。请使用本仓库源码，不要使用来源不明的同名安装包。
 
 ## 自己安装
 
 目前已验证 Linux x86_64；macOS / Windows 尚未完成实机验证。源码构建需要 Rust 1.88+ 和 C 链接器，建议使用当前 stable Rust。
 
-仅首次从源码安装时，需要在项目目录运行：
+仅首次从源码安装时，需要在项目目录运行。先确认 Rust 与 Cargo 均为 1.88 或更新版本，再安装；命令不存在或版本过旧时先看下方“安装常见问题”：
 
 ```bash
+rustc --version
+cargo --version
 cargo install --path . --locked
 ```
 
@@ -63,6 +65,25 @@ codex-nav doctor                       # 环境诊断
 
 终端版按 `q` 退出（搜索时先按 `Esc`），也可按 `Ctrl+C`。网页版请保留启动它的终端，按 `Ctrl+C` 停止；关闭网页不会停止服务。如果由 Agent 后台启动，让它告诉你如何停止该进程。两种模式退出都不影响 Codex。
 
+## 安装常见问题
+
+**提示 `cargo: command not found`，或 `lock file version 4 requires…`？**
+
+前者可能是尚未安装工具链，也可能只是 PATH 未配置；后者表示当前调用的 Cargo 太旧。不要直接照系统提示安装 `apt` 里的旧版本：例如 Cargo 1.75 不满足本项目要求。
+
+如果已通过 rustup 安装工具链，且 `~/.cargo/env` 存在，Bash/Zsh 用户先执行：
+
+```bash
+source "$HOME/.cargo/env"
+command -v cargo
+cargo --version
+rustc --version
+```
+
+确认两者均为 1.88+ 后，再在源码目录执行 `cargo install --path . --locked`。如果仍过旧，需要通过 rustup 升级工具链；如果 env 文件不存在，先检查是否使用了自定义安装目录，确实未安装时再通过 rustup 安装，也可交给 Agent 处理。
+
+不要删除或改写 `Cargo.lock`，也不要加 `-Znext-lockfile-bump` 绕过错误。已有系统 Rust 不必因此卸载；关键是当前终端选中了符合要求的工具链。若仅当前终端生效，请按上方 PATH 说明配置新终端。
+
 ## 使用前知道这些
 
 - **读取你自己的数据**：默认读取 `~/.codex`，也支持 `CODEX_HOME`。没有会话时显示空列表；找不到旧记录可用 `--all`。
@@ -72,6 +93,6 @@ codex-nav doctor                       # 环境诊断
 
 ## 更多
 
-[Agent 安装与自检](docs/agent-setup.md) · [详细使用指南](Codex-Navigator-User-Guide.md) · [验收记录](docs/qa.md) · [架构与限制](docs/architecture.md) · [版本记录](CHANGELOG.md)
+[Agent 安装与自检](docs/agent-setup.md) · [详细使用指南](Codex-Navigator-User-Guide.md) · [版本记录](CHANGELOG.md)
 
 [MIT License](LICENSE)。独立社区工具，与 OpenAI 官方项目无隶属关系。

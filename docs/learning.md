@@ -69,3 +69,9 @@
 **Key insight:** cargo install 安装的是独立二进制，Web 资源已内嵌；日常使用不依赖源码工作目录。命令能否直接输入取决于 PATH，应区分当前进程的临时配置与用户新终端的持久配置，后者需要针对实际 shell 授权设置和验证。
 **Details / snippet:** 已在 /tmp 使用临时安装命令通过 --version / --help；README 增加任意目录启动与 PATH 说明，Agent 指南增加新终端验收要求。未修改用户 shell，未进行全局安装。
 **Tags:** #installation #path #shell #readme #verification
+
+## 2026-09-06 — 安装排错与面向用户的文档入口
+**Question:** 如何在 README 防止旧 Cargo 安装失败，并减少开发过程文档对用户的干扰？
+**Key insight:** 工具链报错应先确认命令路径和版本，不能将 PATH 缺失误判为必须重新安装；旧 Cargo 的 v4 锁文件错误也不应通过改锁文件规避。精简 README 导航可降低用户阅读负担，但取消链接不等于从公开仓库隐藏文件，保留开发历史与整理用户入口是不同操作。
+**Details / snippet:** 新增 FAQ 和 Agent 工具链选择检查，本机 source ~/.cargo/env 后 Rust/Cargo 1.98.1 验证通过；文档链接与差异检查通过。保留设计和验收文件，不改 ignore、不删除、不重写历史、不推送。
+**Tags:** #readme #rust #installation #documentation #verification

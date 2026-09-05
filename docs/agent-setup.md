@@ -6,7 +6,9 @@
 
 - 使用用户提供的源码目录；若只提供仓库 URL，克隆到新的目录。不要覆盖已有工作目录，不猜测仓库地址，不安装未经确认的同名软件包。
 - 阅读该版本 README；检查操作系统、CPU、`rustc --version`、`cargo --version` 与 C 链接器。当前仅 Linux x86_64 完成实机验收，其他平台先说明未验证，不承诺兼容。
+- 工具链命令不存在或版本过旧时，先检查命令解析路径、已有 rustup 与 Cargo 安装目录，不直接跟随系统提示执行 apt/snap 安装。Bash/Zsh 默认 rustup 安装且 `~/.cargo/env` 存在时，可在当前进程 `source "$HOME/.cargo/env"` 后重新检查 `command -v cargo`、Cargo 与 Rust 版本；自定义目录按实际配置处理。只有确认现有工具链缺失或不满足要求后，才按用户授权安装或升级。
 - 源码声明最低 Rust 1.88，推荐 stable。缺依赖时说明需要安装什么，按用户授权使用官方渠道；管理员权限、修改系统配置或覆盖已有安装必须先确认。不要为普通安装额外安装 Node、Docker 或浏览器自动化工具。
+- 同时核对 Cargo 与 rustc 均为 1.88+，防止系统 Cargo 和 rustup Rust 混用。`lock file version 4 requires…` 是旧 Cargo 读取锁文件失败，不是锁文件损坏；不得删除/降级 Cargo.lock、添加 `-Znext-lockfile-bump` 或降低项目版本约束绕过。不要因此卸载系统 Rust，先修正工具链选择与 PATH。
 - 检查是否已有 `codex-nav`，记录路径和版本；不要直接加 `--force` 覆盖。不要为了安装此项目升级或重装 Codex。
 - 不写入 `~/.codex`、`CODEX_HOME`、rollout 或 session_index，不输出或上传真实 Prompt、回复、认证配置及环境密钥。不要把用户主目录或 Codex 目录作为测试目录。
 
