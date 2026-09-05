@@ -8,6 +8,7 @@ use ratatui::{
 
 use crate::{
     app::{App, Focus},
+    domain::SessionIdentity,
     util::{preview, sanitize},
 };
 
@@ -40,11 +41,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             .map(|p| p.to_string_lossy())
             .unwrap_or_default();
         format!(
-            " Codex Navigator · {} · {} · {} turns · {}",
-            preview(&cwd, 50),
+            " Codex Navigator · {} · {} · {} · {} turns · updated {} · {}",
+            if app.live { "WATCHING" } else { "STATIC" },
+            identity_label(&session.meta.identity),
             preview(&session.meta.id, 12),
             session.turns.len(),
-            if app.live { "LIVE" } else { "STATIC" }
+            session
+                .meta
+                .updated_at
+                .map(|date| date.format("%Y-%m-%d %H:%M UTC").to_string())
+                .unwrap_or_else(|| "unknown".into()),
+            preview(&cwd, 40)
         )
     } else {
         " Codex Navigator · waiting for session".into()
@@ -130,9 +137,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     } else if app.picker {
         " / search  ↑/↓ choose  Enter open  r refresh  ? help  q quit"
     } else if app.focus == Focus::Viewer {
-        " g/G top/end  [/] turn  Tab timeline  / search  c copy  ? help  q quit"
+        " f final  g/G top/end  [/] turn  Tab timeline  / search  c copy  ? help  q quit"
     } else {
-        " / search  [/] turn  G latest  Tab focus  c copy  s sessions  ? help  q quit"
+        " f final  / search  [/] turn  G latest  Tab focus  c copy  s sessions  ? help  q quit"
     };
     frame.render_widget(Paragraph::new(footer), sections[3]);
     if app.help {
@@ -272,8 +279,10 @@ fn viewer(frame: &mut Frame, app: &mut App, area: Rect) {
         .viewer_lines(inner.width as usize, inner.height as usize)
         .into_iter()
         .map(|line| {
-            if matches!(line.as_str(), "USER" | "AGENT" | "OUTPUT" | "NOTICE")
-                || line.starts_with("ACTIVITY ·")
+            if matches!(
+                line.as_str(),
+                "USER" | "AGENT" | "FINAL ANSWER" | "OUTPUT" | "NOTICE"
+            ) || line.starts_with("ACTIVITY ·")
                 || line.starts_with("FILE ·")
                 || line.starts_with("RESULT ·")
             {
@@ -355,7 +364,10 @@ fn picker(frame: &mut Frame, app: &mut App, area: Rect) {
             format!(
                 "{} {}",
                 if selected { "▸" } else { " " },
-                preview(title, inner.width.saturating_sub(2) as usize)
+                preview(
+                    &format!("[{}] {title}", s.identity.kind.label()),
+                    inner.width.saturating_sub(2) as usize
+                )
             ),
             style,
         ));
@@ -383,7 +395,10 @@ fn picker(frame: &mut Frame, app: &mut App, area: Rect) {
             lines.push(
                 Line::from(format!(
                     "  {}",
-                    preview(&cwd, inner.width.saturating_sub(2) as usize)
+                    preview(
+                        &format!("{} · {}", identity_label(&s.identity), cwd),
+                        inner.width.saturating_sub(2) as usize
+                    )
                 ))
                 .style(Style::default().fg(Color::DarkGray)),
             );
@@ -394,7 +409,7 @@ fn picker(frame: &mut Frame, app: &mut App, area: Rect) {
 
 fn help(frame: &mut Frame, area: Rect) {
     let width = area.width.min(76);
-    let height = area.height.min(19);
+    let height = area.height.min(20);
     let popup = Rect::new(
         area.x + (area.width - width) / 2,
         area.y + (area.height - height) / 2,
@@ -411,7 +426,8 @@ fn help(frame: &mut Frame, area: Rect) {
         "Enter       Focus viewer / open picker or search result",
         "PgUp/PgDn   Scroll viewer by a page",
         "Home / End  Viewer top / bottom",
-        "/           Search prompts, or picker title / cwd / id",
+        "f           Jump to the last retained final answer in this turn",
+        "/           Search prompts, or picker title / cwd / id / identity",
         "Esc         Cancel search / focus timeline / leave picker",
         "c / C       Copy prompt / visible turn text",
         "r / s       Refresh / session picker",
@@ -427,4 +443,15 @@ fn help(frame: &mut Frame, area: Rect) {
             .block(panel(" KEYBOARD HELP ".into(), true)),
         popup,
     );
+}
+
+fn identity_label(identity: &SessionIdentity) -> String {
+    let mut label = identity.kind.label().to_owned();
+    if let Some(agent) = &identity.agent_label {
+        label.push_str(&format!(" {}", preview(agent, 18)));
+    }
+    if let Some(parent) = &identity.parent_id {
+        label.push_str(&format!(" · parent {}", preview(parent, 12)));
+    }
+    label
 }

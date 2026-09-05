@@ -267,7 +267,12 @@ fn run() -> Result<()> {
             Event::Resize(_, _) => redraw = true,
             Event::Key(key) => {
                 redraw = true;
-                match app.handle_key(key) {
+                let previous_toast = app.toast.clone();
+                let action = app.handle_key(key);
+                if app.toast.is_some() && app.toast != previous_toast {
+                    toast_until = Instant::now() + Duration::from_secs(3);
+                }
+                match action {
                     Action::Quit => break,
                     Action::None => (),
                     Action::OpenSession(path) => {

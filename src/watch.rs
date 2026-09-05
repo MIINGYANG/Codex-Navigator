@@ -166,6 +166,11 @@ fn run(
             || reset)
             && (!loading || last_sent.elapsed() >= Duration::from_millis(100))
         {
+            tail.parser.session.meta.updated_at = std::fs::metadata(&path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .map(Into::into)
+                .or(tail.session().meta.updated_at);
             let update = Update::Batch {
                 meta: tail.session().meta.clone(),
                 stats: tail.session().parse_stats.clone(),

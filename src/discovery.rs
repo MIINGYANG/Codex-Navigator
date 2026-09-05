@@ -1,6 +1,9 @@
 //! Read-only, bounded session discovery. Index entries supplement actual rollouts.
 use crate::parser::{jsonl_reader::BoundedReader, Parser};
-use crate::{config::Config, domain::SessionSummary};
+use crate::{
+    config::Config,
+    domain::{SessionKind, SessionSummary},
+};
 use anyhow::{bail, Context, Result};
 use chrono::{DateTime, Duration, Local, Utc};
 use directories::BaseDirs;
@@ -61,6 +64,9 @@ pub fn discover(
     summaries.sort_by(|left, right| {
         relationship(right.cwd.as_deref(), &cwd)
             .cmp(&relationship(left.cwd.as_deref(), &cwd))
+            .then_with(|| {
+                identity_priority(left.identity.kind).cmp(&identity_priority(right.identity.kind))
+            })
             .then_with(|| right.updated_at.cmp(&left.updated_at))
             .then_with(|| left.path.cmp(&right.path))
     });
@@ -70,19 +76,33 @@ pub fn discover(
 pub fn auto_select(summaries: &[SessionSummary], cwd: &Path) -> Option<usize> {
     let cwd = normalized_path(cwd);
     for priority in [2, 1] {
-        let mut matches = summaries
+        let matches: Vec<_> = summaries
             .iter()
             .enumerate()
-            .filter(|(_, session)| relationship(session.cwd.as_deref(), &cwd) == priority);
-        if let Some((index, _)) = matches.next() {
-            return if matches.next().is_none() {
-                Some(index)
-            } else {
-                None
-            };
+            .filter(|(_, session)| relationship(session.cwd.as_deref(), &cwd) == priority)
+            .collect();
+        if matches.is_empty() {
+            continue;
         }
+        let mut main = matches
+            .iter()
+            .filter(|(_, session)| session.identity.kind == SessionKind::Main);
+        if let Some((index, _)) = main.next() {
+            return main.next().is_none().then_some(*index);
+        }
+        // Preserve legacy selection only when the single candidate is not a known agent.
+        return (matches.len() == 1 && matches[0].1.identity.kind == SessionKind::Unknown)
+            .then_some(matches[0].0);
     }
     None
+}
+
+fn identity_priority(kind: SessionKind) -> u8 {
+    match kind {
+        SessionKind::Main => 0,
+        SessionKind::Unknown => 1,
+        SessionKind::Subagent => 2,
+    }
 }
 
 pub fn resolve_session(home: &Path, id_or_path: &str, config: &Config) -> Result<PathBuf> {
@@ -279,6 +299,7 @@ fn read_summary(path: &Path, config: &Config) -> Result<SessionSummary> {
         summary.id = session.meta.id;
     }
     summary.cwd = session.meta.cwd;
+    summary.identity = session.meta.identity;
     summary.first_prompt = session.turns.first().map(|turn| {
         if turn.prompt.text.is_empty() {
             turn.prompt.preview.clone()

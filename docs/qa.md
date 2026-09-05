@@ -69,3 +69,18 @@ cargo install --path . --locked
 - 终端验收脚本增加长正文场景；70/122/70/120 列反复切换后，g 显示 USER，G 显示正文末尾，始终保留 TURN 02 和 +1 new turn。
 - `target/release/codex-nav --version` 返回 1.0.1。退出旧 Navigator 后重新运行该 binary 即可使用新版本。
 - 本地版本标签：v1.0.0 基线、v1.0.1 修复。未配置远程、未执行 push；仍不修改任何 Codex 数据。
+
+## v1.1.0 — 2026-09-06
+
+三项需求已实现并验证：最新 Prompt 滚动保留、会话来源辨认、f 最终回复定位。
+
+- `cargo fmt --check`：通过。
+- `cargo clippy --all-targets --all-features -- -D warnings`：通过，零 warning。
+- `cargo test`：121 tests 通过（新增 26 项），包含 parser、discovery、state、incremental、worker、CLI 和宽窄渲染。
+- `cargo build --release` 及 release examples：通过；`target/release/codex-nav --version` 返回 1.1.0。
+- `python3 scripts/terminal_qa.py target/release/codex-nav`：通过；新增 f、completion phase 升级、MAIN/WATCHING、无 final 提示及到期消失，保留 g/G、搜索、历史保护、剪贴板降级、q/Ctrl+C 和 termios 恢复验收。
+- 真实只读验收：MAIN 12,794,851 bytes / 10 Turn / 9 条 final；SUBAGENT 838,023 bytes / 5 Turn / 4 条 final，父会话字段存在。两份历史文件 SHA-256 不变，均无 malformed/oversized；真实 MAIN 终端打开、resize、导航、Ctrl+C 通过，未记录内容。
+- 合成 56,791,806 bytes / 4096 Turn：解析 175.23 ms，309.08 MiB/s；索引 0.66 ms，最大搜索 0.186 ms；滚动保留正文 50,590,239 bytes，最新回复保留。
+- 256 MiB 超大单行流式跳过：40.95 ms，之后 Prompt 正常；该基准进程峰值 RSS 57,420 KiB（并非所有工作负载的内存保证）。
+
+已知边界：Prompt 单轮 256 KiB；默认单记录 4 MiB；100,000 Turn / 200,000 活动仍为硬上限。超限旧正文仅保留预览/省略标记，不做磁盘分页恢复；f 只定位仍保留的可靠 final。16 / 48 MiB 是正文预算，不是总进程内存上限。Windows/macOS 未在本机实测。

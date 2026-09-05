@@ -167,6 +167,7 @@ def main():
                                 ["Synthetic long viewer line " + str(n) for n in range(100)]
                                 + ["TURN TWO END"])}))
         app = Navigator(binary, ["--session", str(session)], root)
+        app.expect("WATCHING")
         app.expect("第二轮")
         app.send("g")
         app.output.clear()
@@ -207,6 +208,10 @@ def main():
         app.output.clear()
         app.resize(121, 32)
         app.expect("TURN 03")
+        app.send("f")
+        app.expect("No retained final answer")
+        app.pump(3.2)
+        assert "No retained final answer" not in app.screen.text(), "toast did not expire"
         digest = hashlib.sha256(session.read_bytes()).digest()
         app.close()
         assert hashlib.sha256(session.read_bytes()).digest() == digest
@@ -221,6 +226,31 @@ def main():
         app.expect("No Codex sessions found")
         app.close()
         print("PASS terminal: empty-session picker")
+
+        final_session = root / "rollout-final.jsonl"
+        final_session.write_bytes(
+            (json.dumps({"type": "session_meta", "payload": {
+                "id": "synthetic-main", "source": "cli", "cwd": str(root)}}) + "\n").encode()
+            + record({"type": "user_message", "message": "Find the final answer"})
+            + record({"type": "agent_message", "message": "\n".join(
+                "Working line " + str(n) for n in range(100))})
+            + record({"type": "agent_message", "message": "FINAL RESULT VERIFIED"})
+            + record({"type": "task_complete", "last_agent_message": "FINAL RESULT VERIFIED"}))
+        final_digest = hashlib.sha256(final_session.read_bytes()).digest()
+        final_app = Navigator(binary, ["--session", str(final_session)], root)
+        final_app.expect("WATCHING")
+        final_app.expect("MAIN")
+        for width in (120, 70, 122):
+            final_app.resize(width, 32)
+            final_app.send("f")
+            final_app.expect("FINAL ANSWER")
+            final_app.expect("FINAL RESULT VERIFIED")
+            final_app.expect("TURN 01")
+            final_app.send("g")
+            final_app.expect("USER")
+        final_app.close()
+        assert hashlib.sha256(final_session.read_bytes()).digest() == final_digest
+        print("PASS terminal: final-answer/phase-promotion/wide-narrow/main-identity/watching/read-only")
 
         if args.real_session:
             path = args.real_session.resolve()

@@ -25,3 +25,9 @@
 所有 session 使用 File::open，只读解析。JSONL 的换行符作为提交标记，末尾无换行记录保留到后续补齐；首记录允许 BOM。默认单记录上限 4 MiB，超限流式丢弃到换行后继续。后台每批最多读取 4 MiB，使主界面在大文件加载期间保持可交互。
 
 这些格式是观察结果，不是稳定的官方 API 合同。tests/fixtures 内全部为人工构造的最小样本。
+
+## v1.1.0 补充检查
+
+本机主会话 `source` 为 `cli`；子会话为 `source.subagent.thread_spawn`，其中包含 parent_thread_id、depth、agent_path、agent_nickname、agent_role，顶层也可能提供父会话/代理信息。归一化同时兼容 source 字符串、对象与常见字段命名差异；未知来源保持 UNKNOWN，单独 forked_from_id 不推断为子代理。首条 metadata 即使缺少 id 也不会被继承历史覆盖。
+
+最终回复来自 AgentMessage 的 phase=final_answer 或 task_complete.last_agent_message；同一回复先无 phase、后补标记时升级原活动而不重复生成，已截断长回复使用有界镜像指纹辅助匹配。普通 agent_message、任务完成但缺少最后回复文本，不构成最终回复定位依据。

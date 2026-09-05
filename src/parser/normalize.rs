@@ -5,9 +5,13 @@ use crate::{
 };
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::{
+    collections::{BTreeSet, HashMap, VecDeque},
+    hash::{DefaultHasher, Hash, Hasher},
+};
 
-const MAX_TEXT_BYTES: usize = 64 * 1024 * 1024;
+const PROMPT_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const ACTIVITY_TEXT_BYTES: usize = 48 * 1024 * 1024;
 const MAX_ITEM_BYTES: usize = 64 * 1024;
 const MAX_PROMPT_BYTES: usize = 256 * 1024;
 const MAX_TURNS: usize = 100_000;
@@ -24,9 +28,13 @@ pub struct Parser {
     seq: usize,
     generation: usize,
     user_seen: VecDeque<(String, &'static str, usize, usize, usize)>,
-    agent_seen: VecDeque<(String, &'static str, usize, usize)>,
+    agent_seen: VecDeque<(u64, &'static str, usize, usize, usize, String)>,
     item_seen: VecDeque<(String, String, usize)>,
-    retained: usize,
+    prompt_retained: usize,
+    activity_retained: usize,
+    prompt_order: VecDeque<usize>,
+    activity_order: VecDeque<(usize, usize)>,
+    saw_meta: bool,
     items: usize,
 }
 
@@ -45,7 +53,11 @@ impl Parser {
             user_seen: VecDeque::new(),
             agent_seen: VecDeque::new(),
             item_seen: VecDeque::new(),
-            retained: 0,
+            prompt_retained: 0,
+            activity_retained: 0,
+            prompt_order: VecDeque::new(),
+            activity_order: VecDeque::new(),
+            saw_meta: false,
             items: 0,
         }
     }
@@ -76,29 +88,57 @@ impl Parser {
         self.dirty.insert(i);
     }
     fn limited(&mut self, text: String, limit: usize) -> String {
-        let mut n = text
-            .len()
-            .min(limit)
-            .min(MAX_TEXT_BYTES.saturating_sub(self.retained));
+        let mut n = text.len().min(limit);
         while !text.is_char_boundary(n) {
             n -= 1;
         }
         self.session.parse_stats.omitted_text_bytes += text.len() - n;
-        self.retained += n;
         if n < text.len() && n > 0 {
             format!("{}\n[display text truncated]", &text[..n])
         } else {
             text[..n].to_owned()
         }
     }
+    fn reserve_activity(&mut self, bytes: usize, keep: Option<(usize, usize)>) {
+        while self.activity_retained + bytes > ACTIVITY_TEXT_BYTES {
+            let Some((i, j)) = self.activity_order.pop_front() else {
+                break;
+            };
+            if keep == Some((i, j)) {
+                self.activity_order.push_back((i, j));
+                continue;
+            }
+            let old = std::mem::replace(&mut self.session.turns[i].items[j], TurnItem::Omitted);
+            let removed = old.retained_bytes();
+            self.activity_retained -= removed;
+            self.session.parse_stats.omitted_text_bytes += removed;
+            self.touch(i);
+        }
+    }
+    fn promote_final(&mut self, i: usize, j: usize) -> bool {
+        let TurnItem::AgentMessage { phase, .. } = &self.session.turns[i].items[j] else {
+            return false;
+        };
+        let old = phase.as_ref().map_or(0, String::len);
+        self.reserve_activity("final_answer".len().saturating_sub(old), Some((i, j)));
+        if let TurnItem::AgentMessage { phase, .. } = &mut self.session.turns[i].items[j] {
+            *phase = Some("final_answer".into());
+        }
+        self.activity_retained = self.activity_retained - old + "final_answer".len();
+        self.touch(i);
+        true
+    }
     fn record(&mut self, v: &Value) {
         let kind = s(v, "type");
         let p = v.get("payload").unwrap_or(v);
         let timestamp = time(v.get("timestamp"));
+        self.session.meta.updated_at = self.session.meta.updated_at.max(timestamp);
         match kind {
             "session_meta" => {
                 // Fork histories may contain their parent's metadata: first identity wins.
-                if self.session.meta.id.is_empty() {
+                if !self.saw_meta {
+                    self.saw_meta = true;
+                    self.session.meta.identity = super::identity::parse_identity(p);
                     self.session.meta.id = s(p, "id").to_owned();
                     if self.session.meta.id.is_empty() {
                         self.session.meta.id = s(p, "session_id").to_owned();
@@ -338,17 +378,49 @@ impl Parser {
             }
         }
         let i = self.active.expect("created turn");
-        let retained = self.limited(
-            text,
-            MAX_PROMPT_BYTES.saturating_sub(self.session.turns[i].prompt.text.len()),
-        );
+        let existing = self.session.turns[i].prompt.text.len();
+        let separator = usize::from(existing > 0 && !text.is_empty());
+        let mut n = text
+            .len()
+            .min(MAX_PROMPT_BYTES.saturating_sub(existing + separator));
+        while !text.is_char_boundary(n) {
+            n -= 1;
+        }
+        let added = n + if n > 0 { separator } else { 0 };
+        while self.prompt_retained + added > PROMPT_TEXT_BYTES {
+            let old = self
+                .prompt_order
+                .pop_front()
+                .expect("prompt budget has retained bodies");
+            if old == i {
+                self.prompt_order.push_back(old);
+                continue;
+            }
+            let prompt = &mut self.session.turns[old].prompt;
+            let removed = prompt.text.len();
+            prompt.text = String::new();
+            prompt.omitted_bytes += removed;
+            self.prompt_retained -= removed;
+            self.session.parse_stats.omitted_text_bytes += removed;
+            self.touch(old);
+        }
+        if existing == 0 && n > 0 {
+            self.prompt_order.push_back(i);
+        }
+        self.prompt_retained += added;
+        let omitted = text.len() - n;
+        self.session.parse_stats.omitted_text_bytes += omitted;
+        let retained = &text[..n];
         let turn = &mut self.session.turns[i];
+        turn.prompt.omitted_bytes += omitted;
         if !turn.prompt.text.is_empty() && !retained.is_empty() {
             turn.prompt.text.push('\n');
         }
-        turn.prompt.text.push_str(&retained);
+        turn.prompt.text.push_str(retained);
         turn.prompt.images_count += images;
-        turn.prompt.preview = if turn.prompt.text.is_empty() {
+        turn.prompt.preview = if turn.prompt.text.is_empty() && turn.prompt.omitted_bytes > 0 {
+            turn.prompt.preview.clone()
+        } else if turn.prompt.text.is_empty() {
             format!("[{} image(s)]", turn.prompt.images_count)
         } else {
             preview(&turn.prompt.text, self.preview_width)
@@ -383,24 +455,60 @@ impl Parser {
         if text.is_empty() || matches!(phase, Some("analysis" | "reasoning")) {
             return;
         }
-        if self.seen_item(id, "agent") {
-            return;
-        }
         let i = self.active.unwrap_or(usize::MAX);
-        if self.agent_seen.iter().any(|(t, src, seq, idx)| {
-            *idx == i && t == &text && *src != source && self.seq.saturating_sub(*seq) <= 16
-        }) {
+        let mut hasher = DefaultHasher::new();
+        text.hash(&mut hasher);
+        let fingerprint = hasher.finish();
+        let matching = self
+            .agent_seen
+            .iter()
+            .rev()
+            .find(|(t, src, seq, idx, _, old_id)| {
+                *idx == i
+                    && ((*t == fingerprint
+                        && *src != source
+                        && (source == "completion" || self.seq.saturating_sub(*seq) <= 16))
+                        || (!id.is_empty() && old_id == id))
+            })
+            .map(|entry| entry.4);
+        if let Some(j) = matching {
+            if phase == Some("final_answer") {
+                if self.promote_final(i, j) {
+                    return;
+                }
+            } else if !matches!(self.session.turns[i].items[j], TurnItem::Omitted) {
+                return;
+            }
+        }
+        if self.seen_item(id, "agent") && matching.is_none() {
             return;
         }
-        self.agent_seen
-            .push_back((text.clone(), source, self.seq, i));
+        let Some(turn) = self.session.turns.get(i) else {
+            return;
+        };
+        let j = turn.items.len();
+        self.add(TurnItem::AgentMessage {
+            text,
+            phase: phase.map(|p| preview(p, 64)),
+        });
+        if self.session.turns[i].items.len() == j {
+            return;
+        }
+        self.agent_seen.push_back((
+            fingerprint,
+            source,
+            self.seq,
+            i,
+            j,
+            if id.len() <= 256 {
+                id.to_owned()
+            } else {
+                String::new()
+            },
+        ));
         while self.agent_seen.len() > 8 {
             self.agent_seen.pop_front();
         }
-        self.add(TurnItem::AgentMessage {
-            text,
-            phase: phase.map(str::to_owned),
-        });
     }
     fn add(&mut self, item: TurnItem) {
         let Some(i) = self.active else {
@@ -414,7 +522,7 @@ impl Parser {
         let item = match item {
             TurnItem::AgentMessage { text, phase } => TurnItem::AgentMessage {
                 text: self.limited(text, MAX_ITEM_BYTES),
-                phase,
+                phase: phase.map(|phase| self.limited(phase, 64)),
             },
             TurnItem::ToolCall { name, summary } => {
                 self.session.turns[i].activity.tool_calls += 1;
@@ -446,13 +554,19 @@ impl Parser {
                 }
                 TurnItem::FileActivity {
                     path: self.limited(path, 4096),
-                    kind,
+                    kind: self.limited(kind, 256),
                 }
             }
             TurnItem::Notice { text } => TurnItem::Notice {
                 text: self.limited(text, 4096),
             },
+            TurnItem::Omitted => TurnItem::Omitted,
         };
+        let bytes = item.retained_bytes();
+        self.reserve_activity(bytes, None);
+        self.activity_retained += bytes;
+        self.activity_order
+            .push_back((i, self.session.turns[i].items.len()));
         self.session.turns[i].items.push(item);
         self.items += 1;
         self.touch(i);
@@ -472,12 +586,15 @@ impl Parser {
         let old = self.active;
         self.active = Some(i);
         if let Some(text) = p.get("last_agent_message").and_then(Value::as_str) {
-            if !self.session.turns[i]
+            let text = sanitize(text);
+            if let Some(j) = self.session.turns[i]
                 .items
                 .iter()
-                .any(|item| matches!(item,TurnItem::AgentMessage {text:t,..} if t==text))
+                .rposition(|item| matches!(item,TurnItem::AgentMessage {text:t,..} if t==&text))
             {
-                self.agent(sanitize(text), Some("final_answer"), "completion", "");
+                self.promote_final(i, j);
+            } else {
+                self.agent(text, Some("final_answer"), "completion", "");
             }
         }
         if failed || activity::error(p) {

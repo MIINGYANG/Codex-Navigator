@@ -10,7 +10,7 @@ impl SearchIndex {
         if index >= self.entries.len() {
             self.entries.resize(index + 1, (u64::MAX, String::new()));
         }
-        self.entries[index] = (turn.revision, turn.prompt.text.to_lowercase());
+        self.entries[index] = (turn.revision, prompt_text(turn).to_lowercase());
     }
 
     pub fn sync(&mut self, turns: &[Turn]) {
@@ -18,9 +18,9 @@ impl SearchIndex {
         for (i, turn) in turns.iter().enumerate() {
             if i == self.entries.len() {
                 self.entries
-                    .push((turn.revision, turn.prompt.text.to_lowercase()));
+                    .push((turn.revision, prompt_text(turn).to_lowercase()));
             } else if self.entries[i].0 != turn.revision {
-                self.entries[i] = (turn.revision, turn.prompt.text.to_lowercase());
+                self.entries[i] = (turn.revision, prompt_text(turn).to_lowercase());
             }
         }
     }
@@ -38,6 +38,14 @@ impl SearchIndex {
             .collect();
         matches.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| b.0.cmp(&a.0)));
         matches.into_iter().map(|(index, _)| index).collect()
+    }
+}
+
+pub fn prompt_text(turn: &Turn) -> &str {
+    if turn.prompt.text.is_empty() && turn.prompt.omitted_bytes > 0 {
+        &turn.prompt.preview
+    } else {
+        &turn.prompt.text
     }
 }
 

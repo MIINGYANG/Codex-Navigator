@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::{
     domain::{ParseStats, Session, SessionMeta, SessionSummary, Turn, TurnItem},
-    index::{score, SearchIndex},
+    index::{prompt_text, score, SearchIndex},
     util::{sanitize, wrap},
 };
 
@@ -50,7 +50,14 @@ pub struct App {
     pub picker_offset: usize,
     index: SearchIndex,
     search_original: Option<usize>,
-    viewer_cache: Option<(usize, u64, usize, Vec<String>)>,
+    viewer_cache: Option<ViewerCache>,
+    final_answer_anchor: bool,
+}
+
+struct ViewerCache {
+    key: (usize, u64, usize),
+    lines: Vec<String>,
+    final_answer_line: Option<usize>,
 }
 
 impl App {
@@ -71,6 +78,7 @@ impl App {
         self.query.clear();
         self.viewer_scroll = 0;
         self.viewer_cache = None;
+        self.final_answer_anchor = false;
         self.new_turns = 0;
         self.timeline_offset = 0;
         self.focus = Focus::Timeline;
@@ -84,6 +92,7 @@ impl App {
         if follow {
             if self.selected != session.latest_active() {
                 self.viewer_scroll = 0;
+                self.final_answer_anchor = false;
             }
             self.selected = session.latest_active();
             self.new_turns = 0;
@@ -92,6 +101,7 @@ impl App {
             if self.selected.is_some_and(|i| i >= session.turns.len()) {
                 self.selected = session.latest_active();
                 self.viewer_scroll = 0;
+                self.final_answer_anchor = false;
             }
         }
         self.index.sync(&session.turns);
@@ -148,6 +158,7 @@ impl App {
         if follow {
             if self.selected != session.latest_active() {
                 self.viewer_scroll = 0;
+                self.final_answer_anchor = false;
             }
             self.selected = session.latest_active();
             self.new_turns = 0;
@@ -181,14 +192,17 @@ impl App {
                 .enumerate()
                 .filter_map(|(i, s)| {
                     let haystack = format!(
-                        "{} {} {} {}",
+                        "{} {} {} {} {} {} {}",
                         s.title.as_deref().unwrap_or_default(),
                         s.first_prompt.as_deref().unwrap_or_default(),
                         s.id,
                         s.cwd
                             .as_ref()
                             .map(|p| p.to_string_lossy())
-                            .unwrap_or_default()
+                            .unwrap_or_default(),
+                        s.identity.kind.label(),
+                        s.identity.parent_id.as_deref().unwrap_or_default(),
+                        s.identity.agent_label.as_deref().unwrap_or_default()
                     )
                     .to_lowercase();
                     if query.is_empty() {
@@ -228,6 +242,7 @@ impl App {
             selected.filter(|&index| self.session.as_ref().is_some_and(|s| index < s.turns.len()));
         if self.selected != selected {
             self.viewer_scroll = 0;
+            self.final_answer_anchor = false;
         }
         self.selected = selected;
         if self.selected == self.session.as_ref().and_then(Session::latest_active) {
@@ -341,12 +356,35 @@ impl App {
             }
             return Action::None;
         }
+        if matches!(
+            key.code,
+            KeyCode::Char('j' | 'k' | 'g' | 'G')
+                | KeyCode::Up
+                | KeyCode::Down
+                | KeyCode::PageUp
+                | KeyCode::PageDown
+                | KeyCode::Home
+                | KeyCode::End
+        ) {
+            self.final_answer_anchor = false;
+        }
         match key.code {
             KeyCode::Char('q') => return Action::Quit,
             KeyCode::Char('r') => return Action::Refresh,
             KeyCode::Char('s') => return Action::ShowPicker,
             KeyCode::Char('?') => self.help = true,
             KeyCode::Char('/') => self.start_search(),
+            KeyCode::Char('f') => {
+                if self
+                    .selected_turn()
+                    .is_some_and(|turn| turn.items.iter().any(is_final_answer))
+                {
+                    self.focus = Focus::Viewer;
+                    self.final_answer_anchor = true;
+                } else {
+                    self.toast = Some("No retained final answer marked in this turn.".into());
+                }
+            }
             KeyCode::Tab | KeyCode::BackTab => {
                 self.focus = if self.focus == Focus::Timeline {
                     Focus::Viewer
@@ -400,7 +438,7 @@ impl App {
             }
             KeyCode::Char('c') => {
                 if let Some(turn) = self.selected_turn() {
-                    return Action::Copy(sanitize(&turn.prompt.text));
+                    return Action::Copy(sanitize(prompt_text(turn)));
                 }
             }
             KeyCode::Char('C') => {
@@ -459,12 +497,35 @@ impl App {
         if self
             .viewer_cache
             .as_ref()
-            .is_none_or(|(i, r, w, _)| (*i, *r, *w) != key)
+            .is_none_or(|cache| cache.key != key)
         {
-            self.viewer_cache = Some((index, turn.revision, width, wrap(&turn_text(turn), width)));
+            let mut lines = Vec::new();
+            let mut final_answer_line = None;
+            for (text, final_answer) in turn_sections(turn) {
+                if !lines.is_empty() {
+                    lines.push(String::new());
+                }
+                if final_answer {
+                    final_answer_line = Some(lines.len());
+                }
+                lines.extend(wrap(&text, width));
+            }
+            self.viewer_cache = Some(ViewerCache {
+                key,
+                lines,
+                final_answer_line,
+            });
         }
         self.viewer_height = height;
-        let lines = &self.viewer_cache.as_ref().expect("cache populated").3;
+        let cache = self.viewer_cache.as_ref().expect("cache populated");
+        if self.final_answer_anchor {
+            if let Some(line) = cache.final_answer_line {
+                self.viewer_scroll = line;
+            } else {
+                self.final_answer_anchor = false;
+            }
+        }
+        let lines = &cache.lines;
         self.viewer_scroll = self.viewer_scroll.min(lines.len().saturating_sub(height));
         lines
             .iter()
@@ -476,13 +537,46 @@ impl App {
 }
 
 pub fn turn_text(turn: &Turn) -> String {
-    let mut out = format!("USER\n{}\n", sanitize(&turn.prompt.text));
-    if turn.prompt.images_count > 0 {
-        out.push_str(&format!("[{} image(s)]\n", turn.prompt.images_count));
+    turn_sections(turn)
+        .into_iter()
+        .map(|(text, _)| text)
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
+fn is_final_answer(item: &TurnItem) -> bool {
+    matches!(item, TurnItem::AgentMessage { phase: Some(phase), .. } if phase == "final_answer")
+}
+
+fn turn_sections(turn: &Turn) -> Vec<(String, bool)> {
+    let mut prompt = format!("USER\n{}", sanitize(prompt_text(turn)));
+    if turn.prompt.omitted_bytes > 0 {
+        prompt.push_str(if turn.prompt.text.is_empty() {
+            "\n[Earlier prompt body omitted (memory limit); preview shown.]"
+        } else {
+            "\n[Prompt truncated (text limit); retained text shown.]"
+        });
     }
+    if turn.prompt.images_count > 0 {
+        prompt.push_str(&format!("\n[{} image(s)]", turn.prompt.images_count));
+    }
+    let mut sections = vec![(prompt, false)];
+    let mut previous_omitted = false;
     for item in &turn.items {
+        if matches!(item, TurnItem::Omitted) && previous_omitted {
+            continue;
+        }
+        previous_omitted = matches!(item, TurnItem::Omitted);
         let (heading, text) = match item {
-            TurnItem::AgentMessage { text, .. } => ("AGENT".to_owned(), text.as_str()),
+            TurnItem::AgentMessage { text, .. } => (
+                if is_final_answer(item) {
+                    "FINAL ANSWER"
+                } else {
+                    "AGENT"
+                }
+                .to_owned(),
+                text.as_str(),
+            ),
             TurnItem::ToolCall { name, summary } => {
                 (format!("ACTIVITY · {}", sanitize(name)), summary.as_str())
             }
@@ -494,18 +588,25 @@ pub fn turn_text(turn: &Turn) -> String {
                 (format!("FILE · {}", sanitize(kind)), path.as_str())
             }
             TurnItem::Notice { text } => ("NOTICE".to_owned(), text.as_str()),
+            TurnItem::Omitted => (
+                "NOTICE".to_owned(),
+                "Earlier activity omitted (memory limit).",
+            ),
         };
-        out.push_str(&format!("\n{heading}\n{}\n", sanitize(text)));
+        sections.push((
+            format!("{heading}\n{}", sanitize(text)),
+            is_final_answer(item),
+        ));
     }
-    out.push_str(&format!(
-        "\nRESULT · {}\n{} commands · {} tools · {} files read · {} files changed · {} errors",
+    let mut out = format!(
+        "RESULT · {}\n{} commands · {} tools · {} files read · {} files changed · {} errors",
         turn.status.label(),
         turn.activity.commands,
         turn.activity.tool_calls,
         turn.activity.files_read,
         turn.activity.files_changed,
         turn.activity.errors
-    ));
+    );
     if let Some(start) = turn.started_at {
         out.push_str(&format!(
             "\nStarted {}",
@@ -518,5 +619,6 @@ pub fn turn_text(turn: &Turn) -> String {
             end.format("%Y-%m-%d %H:%M:%S UTC")
         ));
     }
-    out
+    sections.push((out, false));
+    sections
 }

@@ -15,3 +15,9 @@
 **Key insight:** 布局宽度和导航焦点是两个独立状态；g/G 应与 j/k 一样按焦点分发，正文首尾跳转不能触发 Turn 选择或清除历史提示。以现有版本建立基线 commit/tag，每次完成验收的改动保存独立提交，并同步语义版本号与 CHANGELOG。
 **Details / snippet:** v1.0.0 基线 e9fd58a；v1.0.1 修复新增 4 个导航回归测试，先复现后修复；全量 95 tests、fmt、clippy、release、伪终端宽窄切换及正文首尾验收通过。查看版本：git log --graph --decorate --oneline --all。
 **Tags:** #keyboard #focus #git #versioning #verification
+
+## 2026-09-06 — 最新输入保留与可靠最终回复定位
+**Question:** 如何解决旧输出耗尽内存后最新 Prompt 消失、主子会话混淆、最终回复难定位？
+**Key insight:** 全局只增不减的正文预算会优先牺牲最新信息；Prompt 与活动应分开使用滚动预算，淘汰旧正文时同步 dirty Turn、搜索和省略提示。会话身份必须来自首条结构化 metadata；最终回复必须依据 phase 或 completion，并在镜像去重时保留后补的语义标记。
+**Details / snippet:** v1.1.0：16 MiB Prompt / 48 MiB 活动预算，f 使用结构化折行锚点。121 tests、fmt、clippy、release、实际终端验收通过；真实 MAIN/SUBAGENT 检查正确，历史文件 hash 不变。模糊搜索测试应核对精确项排名首位，不能假定其他子序列候选不存在。
+**Tags:** #parser #memory #session #navigation #testing

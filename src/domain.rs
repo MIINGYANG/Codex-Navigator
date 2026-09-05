@@ -6,6 +6,33 @@ pub struct SessionMeta {
     pub id: String,
     pub cwd: Option<PathBuf>,
     pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+    pub identity: SessionIdentity,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SessionKind {
+    Main,
+    Subagent,
+    #[default]
+    Unknown,
+}
+
+impl SessionKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Main => "MAIN",
+            Self::Subagent => "SUBAGENT",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionIdentity {
+    pub kind: SessionKind,
+    pub parent_id: Option<String>,
+    pub agent_label: Option<String>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -18,6 +45,7 @@ pub struct SessionSummary {
     pub first_prompt: Option<String>,
     /// None means the lightweight discovery scan has not counted the full file.
     pub turn_count: Option<usize>,
+    pub identity: SessionIdentity,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -50,6 +78,8 @@ pub struct UserPrompt {
     pub text: String,
     pub preview: String,
     pub images_count: usize,
+    /// Text bytes no longer retained; preview remains available if the body is evicted.
+    pub omitted_bytes: usize,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -67,11 +97,42 @@ pub struct Turn {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TurnItem {
-    AgentMessage { text: String, phase: Option<String> },
-    ToolCall { name: String, summary: String },
-    ToolOutput { summary: String, is_error: bool },
-    FileActivity { path: String, kind: String },
-    Notice { text: String },
+    AgentMessage {
+        text: String,
+        phase: Option<String>,
+    },
+    ToolCall {
+        name: String,
+        summary: String,
+    },
+    ToolOutput {
+        summary: String,
+        is_error: bool,
+    },
+    FileActivity {
+        path: String,
+        kind: String,
+    },
+    Notice {
+        text: String,
+    },
+    /// The activity body was evicted to keep newer content within the memory budget.
+    Omitted,
+}
+
+impl TurnItem {
+    pub fn retained_bytes(&self) -> usize {
+        match self {
+            Self::AgentMessage { text, phase } => {
+                text.len() + phase.as_ref().map_or(0, String::len)
+            }
+            Self::ToolCall { name, summary } => name.len() + summary.len(),
+            Self::ToolOutput { summary, .. } => summary.len(),
+            Self::FileActivity { path, kind } => path.len() + kind.len(),
+            Self::Notice { text } => text.len(),
+            Self::Omitted => 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default)]

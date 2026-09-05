@@ -56,7 +56,15 @@ fn typical(path: &Path) -> anyhow::Result<()> {
     assert_eq!(tail.session().parse_stats.records, TURN_COUNT * 5);
     assert_eq!(tail.session().parse_stats.malformed_records, 0);
     assert_eq!(tail.session().parse_stats.skipped_oversize_records, 0);
-    assert_eq!(tail.session().parse_stats.omitted_text_bytes, 0);
+    assert!(tail.session().parse_stats.omitted_text_bytes > 0);
+    assert!(tail
+        .session()
+        .turns
+        .last()
+        .unwrap()
+        .items
+        .iter()
+        .any(|item| matches!(item, TurnItem::AgentMessage { text, .. } if !text.is_empty())));
     assert_eq!(tail.reader.byte_offset, size);
     assert!(tail
         .session()
@@ -90,18 +98,11 @@ fn typical(path: &Path) -> anyhow::Result<()> {
                 + turn
                     .items
                     .iter()
-                    .map(|item| match item {
-                        TurnItem::AgentMessage { text, .. } | TurnItem::Notice { text } => {
-                            text.len()
-                        }
-                        TurnItem::ToolCall { name, summary } => name.len() + summary.len(),
-                        TurnItem::ToolOutput { summary, .. } => summary.len(),
-                        TurnItem::FileActivity { path, kind } => path.len() + kind.len(),
-                    })
+                    .map(TurnItem::retained_bytes)
                     .sum::<usize>()
         })
         .sum();
-    assert!(retained <= 65 * MIB);
+    assert!(retained <= 64 * MIB);
     println!("typical bytes={size} turns={TURN_COUNT} parse_ms={:.2} throughput_mib_s={:.2} index_ms={:.2} max_search_ms={:.3} retained_text_bytes={retained}", elapsed.as_secs_f64() * 1000.0, size as f64 / MIB as f64 / elapsed.as_secs_f64(), index_elapsed.as_secs_f64() * 1000.0, maximum_search.as_secs_f64() * 1000.0);
     Ok(())
 }

@@ -3,7 +3,7 @@
 Codex CLI 的本地只读终端 Sidecar。快速定位历史 Prompt，浏览回复与命令，并实时跟随正在增长的会话。独立社区工具，与 OpenAI 官方项目无隶属关系。
 
 ```text
- Codex Navigator · ~/project · 12 turns · LIVE
+ Codex Navigator · WATCHING · MAIN · ~/project · 12 turns
 ┌ TIMELINE ─────────────────┬ TURN 12 · incomplete ──────────────────┐
 │  10 ✓ 分析项目结构        │ USER                                    │
 │  11 ✓ 检查配置            │ 帮我跑一下测试                          │
@@ -65,8 +65,9 @@ codex-nav
 | `j/k`、`↓/↑` | Timeline 选择；Viewer 逐行滚动；Picker 选择 |
 | `[`、`]` | 任意主界面面板中选择上一/下一 Turn |
 | `g`、`G` | 时间线：第一轮 / 最新未 rollback 的轮；正文：当前轮顶部 / 底部 |
+| `f` | 定位当前轮最后一条明确标记的最终回复；宽窄切换保持位置 |
 | `Enter`、`Tab` | 打开/聚焦 Viewer；切换面板 |
-| `/` | 搜索 Prompt；Picker 中搜索标题、cwd、ID |
+| `/` | 搜索 Prompt；Picker 中搜索标题、cwd、ID、身份、父会话、代理名 |
 | `Esc` | 取消搜索并恢复选择；回到 Timeline；Picker 中退出 |
 | `PgUp/PgDn`、`Home/End` | Viewer 翻页 / 顶部 / 底部 |
 | `c`、`C` | 复制 Prompt / 该 Turn 当前保留的全部可见文本 |
@@ -80,7 +81,11 @@ codex-nav
 
 ## 会话发现
 
-优先使用 `CODEX_HOME`；未设置则使用用户目录下 `.codex`。读取 `sessions/YYYY/MM/DD/rollout-*.jsonl`，默认扫描最近 7 天。当前 cwd 精确匹配优先，父/子目录其次，再按更新时间排序。唯一相关候选自动打开，多个相关候选进入 Picker；无匹配时展示近期会话。`--all` 强制 Picker 并扩展到全部日期。
+优先使用 `CODEX_HOME`；未设置则使用用户目录下 `.codex`。读取 `sessions/YYYY/MM/DD/rollout-*.jsonl`，默认扫描最近 7 天。当前 cwd 精确匹配优先，父/子目录其次，同级别按 MAIN → UNKNOWN → SUBAGENT、更新时间排序。唯一相关 MAIN 自动打开，多个 MAIN 进入 Picker；没有 MAIN 时仅单一 UNKNOWN 可自动打开。子代理不会自动打开，但可在 Picker 中选择或用 `--session` 指定。无匹配时展示近期会话。`--all` 强制 Picker 并扩展到全部日期。
+
+Picker 和会话头部显示 MAIN / SUBAGENT / UNKNOWN、代理标识、父会话短 ID 和更新时间。缺失或未知来源不猜测身份；单独 fork 不等于子代理。`WATCHING` 仅表示 Navigator 正在监控文件，不表示 Codex 正在执行任务；`STATIC` 表示未启用监控。
+
+按 `f` 定位当前轮的 `FINAL ANSWER`，不会切换到最新轮或清除历史新增提示。最终回复只依据 `phase=final_answer` 或 completion 的 `last_agent_message`；缺少标记或正文已淘汰时会提示不可定位，不把最后一条进度消息当最终答案。
 
 `session_index.jsonl` 只补充标题和时间，索引缺失或过期不影响从 rollout 恢复。发现阶段每个文件最多读取 1 MiB，Picker 的大文件轮数先显示 `?`，随后后台补齐；可以立即选择打开，无需等候统计。近期目录为空时会有限回退到最近有数据的日期目录。
 
@@ -125,7 +130,9 @@ Navigator 只读本机 Codex session，不上传数据，不要求账号或 Open
 
 `✓` 表示有明确完成事件，`✕` 表示检测到失败，`…` 表示不完整，`?` 表示未知，`↶` 表示已 rollback。某个命令失败后成功重试，仍保留该轮发生过失败的事实；退出码 0 仅表示命令成功，不推断“所有测试通过”。旧格式若缺少完成事件会保持中性/不完整状态。
 
-超大图片记录默认超过 4 MiB 即流式跳过。单条回复/工具可见文本最多 64 KiB、每轮 Prompt 最多 256 KiB、会话保留文本预算 64 MiB，并限制 100,000 Turn / 200,000 活动；省略计数会显示。原文件不变，完整文本仍在 rollout。只有换行结束的 JSONL 才提交，静态文件末尾无换行也会等待。
+超大图片记录默认超过 4 MiB 即流式跳过。每轮 Prompt 最多 256 KiB，独立正文预算 16 MiB；工具输出不会挤占 Prompt。活动正文预算 48 MiB，单条回复/工具正文最多 64 KiB（另有少量截断标记/字段，均计入活动预算）。预算用满时淘汰较早正文，保留新输入与新回复；旧 Prompt 保留预览供搜索/复制，正文明确提示省略，旧活动合并显示省略提示。搜索不会继续命中已淘汰正文。总正文预算 64 MiB 不等于进程 RSS，索引、预览、模型和后台更新另占内存。
+
+仍限制 100,000 Turn / 200,000 活动；超过条数上限的后续内容不再进入模型。省略计数会显示。原文件不变，完整文本仍在 rollout；本版本不从磁盘按需恢复历史全文。只有换行结束的 JSONL 才提交，静态文件末尾无换行也会等待。
 
 文件变化使用通知和 100 ms 轮询后备。替换/截断会安全重载；无法识别刻意保持身份、前缀、长度和时间戳的原地重写。退出 raw mode 使用恢复 guard，panic 也会恢复；像所有终端应用一样，SIGKILL 无法执行清理，可在 shell 运行 `reset`。
 

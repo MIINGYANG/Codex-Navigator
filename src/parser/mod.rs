@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod identity;
 pub mod jsonl_reader;
 mod normalize;
 pub use normalize::Parser;

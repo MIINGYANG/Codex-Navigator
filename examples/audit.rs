@@ -33,16 +33,27 @@ fn report(index: usize, tail: &Tail, elapsed: Duration) {
     let mut outputs = 0;
     let mut files = 0;
     let mut notices = 0;
+    let mut omitted = 0;
+    let mut finals = 0;
     for item in session.turns.iter().flat_map(|turn| &turn.items) {
         match item {
-            TurnItem::AgentMessage { .. } => agents += 1,
+            TurnItem::AgentMessage { phase, .. } => {
+                agents += 1;
+                finals += usize::from(phase.as_deref() == Some("final_answer"));
+            }
             TurnItem::ToolCall { .. } => calls += 1,
             TurnItem::ToolOutput { .. } => outputs += 1,
             TurnItem::FileActivity { .. } => files += 1,
             TurnItem::Notice { .. } => notices += 1,
+            TurnItem::Omitted => omitted += 1,
         }
     }
     let stats = &session.parse_stats;
+    println!(
+        "file={index} kind={} parent_present={} final_answers={finals} omitted_items={omitted}",
+        session.meta.identity.kind.label(),
+        session.meta.identity.parent_id.is_some()
+    );
     println!(
         "file={index} bytes={} turns={} agents={agents} tool_calls={calls} tool_outputs={outputs} file_items={files} notices={notices} records={} malformed={} oversized={} omitted_text_bytes={} pending_bytes={} elapsed_ms={:.2}",
         tail.reader.byte_offset,
