@@ -75,3 +75,9 @@
 **Key insight:** 工具链报错应先确认命令路径和版本，不能将 PATH 缺失误判为必须重新安装；旧 Cargo 的 v4 锁文件错误也不应通过改锁文件规避。精简 README 导航可降低用户阅读负担，但取消链接不等于从公开仓库隐藏文件，保留开发历史与整理用户入口是不同操作。
 **Details / snippet:** 新增 FAQ 和 Agent 工具链选择检查，本机 source ~/.cargo/env 后 Rust/Cargo 1.98.1 验证通过；文档链接与差异检查通过。保留设计和验收文件，不改 ignore、不删除、不重写历史、不推送。
 **Tags:** #readme #rust #installation #documentation #verification
+
+## 2026-09-06 — 精确路径历史清理与远程验收
+**Question:** 如何在保留本地副本和开发时间线的同时，从公开历史移除两份指定文档？
+**Key insight:** 清理需要覆盖所有相关提交和标签，仅从当前索引取消跟踪不够。先在仓库外保存完整 bundle 和旧远程哈希，逐提交保留非目标文件与元数据，再以精确 lease 原子推送，并用新克隆验证目标路径及其全部历史 blob 都不再可达。
+**Details / snippet:** 12 个提交、6 个注释标签完成映射与验证；7 个文档历史 blob 不再可达，新 SSH clone 和 fsck 通过。本地 Markdown 保留且精确忽略，未永久删除文件。Git 2.25.1 应使用 --stdin 隐式批量事务，而非较新的 start/commit 指令；旧克隆与托管缓存需要另行处理，不能承诺自动消失。
+**Tags:** #git #history #backup #privacy #verification
