@@ -1,4 +1,4 @@
-# Web v1.2.0 实施约定
+# Web 实施约定（v1.3.0）
 
 用户已选择 B「专注阅读」。浅紫底 #f8f7fc、纸面 #ffffff、正文 #302a43、强调 #7156ab、边线 #e5e0ee、警告 #916a32；标题本地衬线，正文系统中文无衬线，路径等宽。不加载网络字体。签名元素是最终回复书签。布局为主会话入口 → 左轻目录 / 右宽正文；窄屏压缩目录，保留全部导航。不引入仪表盘。
 
@@ -13,7 +13,7 @@
 - `/api/info` → `{version, watch, default_all, initial_session: key|null, refresh_ms: 750}`。
 - `/api/sessions?all=0|1&refresh=1` → `{loading, error: string|null, sessions: [{key,id,title,cwd,updated_at,turn_count,first_prompt}]}`。仅主会话；前端标题/目录过滤。扫描异步，loading 时重试。
 - `/api/session/{key}` → `{key, meta:{id,cwd}, generation, revision, loading, offset, total_bytes, turn_count, latest_active: index|null, stats, error: string|null, watch}`。首次启动后台解析；重新加载 generation 改变。前端轮询元数据，变化才获取目录/正文。
-- `/api/session/{key}/turns?q=...&offset=0&limit=100` → `{generation,revision,total,offset,turns:[{index,ordinal,preview,status,errors,revision,started_at,has_final,omitted_bytes}]}`。复用 Prompt 搜索索引；最大分页 100，空查询时间顺序。
+- `/api/session/{key}/turns?q=...&offset=0&limit=100&order=relevance|chronological` → `{generation,revision,total,offset,turns:[{index,ordinal,preview,status,errors,revision,started_at,has_final,omitted_bytes}]}`。复用 Prompt 搜索索引；最大分页 100，空查询时间顺序。默认 relevance 保留原搜索排名；脉络视图请求 chronological，在服务端分页前排序，不能仅将单页排名结果重排后冒充完整时间顺序。非法 order 返回 400。
 - `/api/session/{key}/turn/{index}?offset=0&limit=8` → `{generation,revision,turn:{index,ordinal,id,prompt:{text,preview,images_count,omitted_bytes},status,activity,started_at,completed_at},items:[{index,type,text?,phase?,name?,summary?,is_error?,path?,kind?}],items_total,next_offset:number|null,final_answer:{index,text,phase}|null}`。type 为 agent_message/tool_call/tool_output/file_activity/notice/omitted。最终回复独立提供，仅可靠 final 标记；limit 最大 8。
 - `/api/session/{key}/turn/{index}/text` → 纯文本，复制当前轮完整已保留内容（包括省略标记）。
 - `/api/session/{key}?refresh=1` → 手动刷新，无 watch 时也可用。
@@ -25,3 +25,11 @@ status 值 in_progress/completed/failed/interrupted/unknown/rolled_back，仅描
 实施补充：响应包含 turn.revision，用于避免其他轮更新重绘历史正文；客户端可见活动窗口最多 64 条，前后组均可访问。目录 G 在无搜索时以最新 metadata.latest_active 为准，不能依赖可能尚在加载的旧目录分页。失败资源独立 dirty 重试，不因元数据读取成功就认为正文已同步。
 
 服务端限定打开会话缓存与响应分页，沿用 SessionWorker 增量读取与内存预算；测试只用合成 fixture，真实只读验证不复制用户内容。
+
+## 问题脉络
+
+`web/flow.js` 随 binary 内嵌，复用现有认证与分页 API；纯投影在 `web/state.mjs`。问题轨道每页最多 100 节点，以真实 index 连接；筛选缺口明确标“中间 N 轮未展示”，不进行主题聚类、语义关联、工具调用配对或内部推理重建。单题最多展示 64 条真实活动加 Prompt 与前后分页入口，明确标注省略及无 final。
+
+阅读 / 脉络共享所选轮次，通过 v 或按钮切换。问题轨道方向键和 j/k/g/G 选择问题；步骤方向键移动焦点、Enter 打开；节点原文内 j/k/g/G 滚动其自身面板。翻页后的键盘锚点是当前聚焦问题，不是上次阅读的问题。待新查询或分页返回前，不能用旧结果导航。
+
+进入脉络暂停自动跟随。视图输入签名避免空轮询重绘；工作区快照包含 generation、当前 turn revision、节点选择、活动窗口及加载状态。其他问题变化只替换路径等区域，保留工作区 DOM、文本选择及滚动。视图/会话切换和请求返回仍由原 RequestGate 隔离。尊重 reduced-motion，不使用持续闪动或外部图谱库。

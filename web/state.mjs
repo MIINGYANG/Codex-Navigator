@@ -2,6 +2,98 @@
 export const PAGE_SIZE = 100;
 export const MAX_VISIBLE_ITEMS = 64;
 
+// Connections express recorded order only, never inferred causes or model thoughts.
+export function questionPath(turns, selected) {
+  const nodes = turns
+    .slice(0, PAGE_SIZE)
+    .sort((a, b) => a.index - b.index)
+    .map((turn) => ({
+      ...turn,
+      selected: turn.index === selected,
+    }));
+  const edges = nodes.slice(1).map((node, index) => {
+    const from = nodes[index].index;
+    const skipped = Math.max(0, node.index - from - 1);
+    return {
+      from,
+      to: node.index,
+      skipped,
+      label: skipped ? `中间 ${skipped} 轮未展示` : "下一轮 · 记录顺序",
+    };
+  });
+  return { nodes, edges };
+}
+
+export function processPath(detail, items, start = 0, next = null) {
+  if (!detail) return [];
+  const prompt = detail.turn?.prompt || {};
+  const nodes = [
+    {
+      id: "prompt",
+      kind: "prompt",
+      label: "你的问题",
+      text: prompt.text || prompt.preview || "（无文字内容）",
+      imagesCount: prompt.images_count || 0,
+      omittedBytes: prompt.omitted_bytes || 0,
+      notice: prompt.omitted_bytes
+        ? `${prompt.omitted_bytes} 字节原文因内存预算省略；${prompt.text ? "以上为已保留内容" : "以上仅为目录摘要"}，此视图不能恢复省略内容。`
+        : "",
+    },
+  ];
+  if (start > 0)
+    nodes.push({
+      id: "before",
+      kind: "gap",
+      label: `${start} 条前序记录未展示`,
+      text: "可加载上一组记录；当前连线不表示内容完整或因果关系。",
+    });
+  const visible = items.slice(0, MAX_VISIBLE_ITEMS);
+  const labels = {
+    agent_message: "助手消息",
+    tool_call: "工具调用",
+    tool_output: "工具结果",
+    file_activity: "文件活动",
+    notice: "提示记录",
+    omitted: "省略记录",
+  };
+  for (const item of visible) {
+    const isFinal =
+      item.type === "agent_message" && item.phase === "final_answer";
+    const omitted = item.type === "omitted";
+    nodes.push({
+      id: `item-${item.index}`,
+      kind: item.type,
+      label: isFinal
+        ? "最终回复（已标记）"
+        : Object.hasOwn(labels, item.type)
+          ? labels[item.type]
+          : "其他记录",
+      text: omitted
+        ? "此条活动正文因内存预算省略；此视图不能恢复省略内容。"
+        : item.text || item.summary || item.path || "（无文字内容）",
+      itemIndex: item.index,
+      isError: Boolean(item.is_error),
+      isFinal,
+      omitted,
+      phase: item.phase || null,
+      name: item.name || "",
+    });
+  }
+  const remaining = Math.max(
+    0,
+    (detail.items_total || 0) - start - visible.length,
+  );
+  if (remaining > 0 || next !== null)
+    nodes.push({
+      id: "after",
+      kind: "gap",
+      label:
+        remaining > 0 ? `${remaining} 条后续记录未展示` : "后续记录尚未展示",
+      text: "可继续加载记录；未展示不代表没有后续活动。",
+    });
+  return nodes;
+}
+
 export function activityWindow(start, length, requestedOffset) {
   return {
     replace: requestedOffset < start || length >= MAX_VISIBLE_ITEMS,

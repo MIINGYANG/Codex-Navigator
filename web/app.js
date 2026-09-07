@@ -17,6 +17,7 @@ import {
   pausesFollow,
   chronologicalTarget,
 } from "./state.mjs";
+import { renderFlow } from "./flow.js";
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -33,6 +34,9 @@ const state = {
   turns: [],
   turnOffset: 0,
   turnTotal: 0,
+  loadedTurnOffset: 0,
+  loadedTurnQuery: "",
+  loadedTurnOrder: "relevance",
   detail: null,
   items: [],
   itemStart: 0,
@@ -44,6 +48,9 @@ const state = {
   connected: false,
   authFailed: false,
   seenCount: 0,
+  presentation: "reading",
+  flowInspected: "prompt",
+  flowError: false,
 };
 const gates = Object.fromEntries(
   [
@@ -57,6 +64,7 @@ const gates = Object.fromEntries(
   ].map((name) => [name, new RequestGate()]),
 );
 let token = "",
+  flowSignature = "",
   pollTimer,
   searchTimer,
   toastTimer;
@@ -111,6 +119,116 @@ function size(bytes) {
 }
 function sessionPath(suffix = "") {
   return `/api/session/${encodeURIComponent(state.key)}${suffix}`;
+}
+
+function updateFlow() {
+  if (state.presentation !== "flow" || !state.key) return;
+  const pendingDirectory =
+    state.loadedTurnOrder !== "chronological" ||
+    state.loadedTurnOffset !== state.turnOffset ||
+    state.loadedTurnQuery !== $("prompt-search").value;
+  const data = {
+    turns: pendingDirectory ? [] : state.turns,
+    selected: state.selected,
+    offset: state.turnOffset,
+    total: state.turnTotal,
+    pageSize: PAGE_SIZE,
+    query: $("prompt-search").value,
+    loading: state.turnsDirty && (pendingDirectory || !state.turns.length),
+    detail: state.detail?.turn.index === state.selected ? state.detail : null,
+    items: state.items,
+    start: state.itemStart,
+    next: state.nextItem,
+    inspected: state.flowInspected,
+    activityLoading: state.activityLoading,
+    detailLoading: state.detailLoading,
+    error: state.flowError,
+  };
+  const signature = JSON.stringify([
+    state.key,
+    state.meta?.generation,
+    data.turns.map((t) => [t.index, t.revision]),
+    data.selected,
+    data.offset,
+    data.total,
+    data.query,
+    data.loading,
+    data.detail?.turn.revision,
+    data.items.map((item) => item.index),
+    data.start,
+    data.next,
+    data.inspected,
+    data.activityLoading,
+    data.error,
+  ]);
+  if (flowSignature === signature) return;
+  flowSignature = signature;
+  renderFlow($("flow-view"), data, {
+    select: selectTurn,
+    move: moveSelection,
+    markdown,
+    copy: copyText,
+    page: async (direction) => {
+      state.turnOffset = Math.max(0, state.turnOffset + direction * PAGE_SIZE);
+      await loadTurns();
+      $("question-path")?.scrollTo({ left: 0 });
+    },
+    locate: async () => {
+      if (state.selected === null) return;
+      $("prompt-search").value = "";
+      gates.navigation.invalidate();
+      clearTimeout(searchTimer);
+      state.turnOffset = pageFor(state.selected);
+      await loadTurns();
+      focusTurn(state.selected, true);
+    },
+    more: loadMoreItems,
+    inspect: (id) => {
+      state.flowInspected = id;
+      updateFlow();
+      $("flow-inspector")?.focus({ preventScroll: true });
+      $("flow-inspector")?.scrollIntoView({ block: "nearest" });
+    },
+    read: () => {
+      const final = state.flowInspected === "final";
+      setPresentation("reading");
+      if (final) jumpFinal();
+      else $("reading-area").focus({ preventScroll: true });
+    },
+  });
+}
+
+async function setPresentation(value) {
+  state.presentation = value;
+  gates.navigation.invalidate();
+  $("article").hidden = value === "flow";
+  $("flow-view").hidden = value !== "flow";
+  $("view-reading").setAttribute("aria-pressed", String(value === "reading"));
+  $("view-flow").setAttribute("aria-pressed", String(value === "flow"));
+  if (value === "flow") {
+    state.follow = false;
+    renderMetadata();
+    updateFlow();
+    focusTurn(state.selected, true);
+  } else $("reading-area").focus({ preventScroll: true });
+  $("reading-area").scrollTop = 0;
+  const key = state.key;
+  if (key && state.meta) {
+    await loadTurns();
+    if (state.key === key && state.presentation === value && value === "flow")
+      focusTurn(state.selected, true);
+  }
+}
+
+function focusTurn(index, flow = false) {
+  const node = flow
+    ? $(`flow-question-${index}`)
+    : [...$("turns").children].find(
+        (item) => item.dataset.turn === String(index),
+      );
+  node?.focus({ preventScroll: true });
+  node?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  if (flow && !node) $("question-path")?.focus({ preventScroll: true });
 }
 function validView(view, key) {
   return gates.view.current(view) && key === state.key;
@@ -290,6 +408,7 @@ async function loadSessions(refresh = false) {
 }
 
 async function openSession(key) {
+  flowSignature = "";
   gates.view.next();
   for (const name of ["metadata", "turns", "detail", "items"])
     gates[name].invalidate();
@@ -306,9 +425,16 @@ async function openSession(key) {
   state.follow = true;
   state.turnOffset = 0;
   state.turnTotal = 0;
+  state.loadedTurnOffset = 0;
+  state.loadedTurnQuery = "";
+  state.loadedTurnOrder = "relevance";
   state.detailDirty = true;
   state.turnsDirty = true;
   state.seenCount = 0;
+  state.flowInspected = "prompt";
+  state.flowError = false;
+  if (state.presentation === "flow") state.follow = false;
+  $("flow-view").replaceChildren(element("p", "empty", "正在读取问题脉络…"));
   $("prompt-search").value = "";
   $("picker").hidden = true;
   $("reader").hidden = false;
@@ -407,6 +533,7 @@ async function refreshMetadata(refresh = false) {
     if (reset) {
       state.detail = null;
       state.items = [];
+      state.flowInspected = "prompt";
       notify("会话文件已重新加载");
     }
     renderMetadata();
@@ -445,6 +572,7 @@ async function refreshMetadata(refresh = false) {
       );
       $("copy-turn").disabled = true;
       $("jump-final").disabled = true;
+      updateFlow();
     }
   } catch (error) {
     if (gates.metadata.current(request) && validView(view, key)) failed(error);
@@ -496,6 +624,7 @@ function renderTurns() {
     [...$("turns").children]
       .find((node) => node.dataset.turn === activeIndex)
       ?.focus({ preventScroll: true });
+  updateFlow();
 }
 
 async function loadTurns() {
@@ -503,10 +632,12 @@ async function loadTurns() {
   const request = gates.turns.next(),
     key = state.key;
   state.turnsDirty = true;
+  updateFlow();
   const query = new URLSearchParams({
     q: $("prompt-search").value,
     offset: state.turnOffset,
     limit: PAGE_SIZE,
+    order: state.presentation === "flow" ? "chronological" : "relevance",
   });
   try {
     const result = await api(sessionPath(`/turns?${query}`));
@@ -515,6 +646,9 @@ async function loadTurns() {
     state.turns = result.turns;
     state.turnTotal = result.total;
     state.turnOffset = result.offset;
+    state.loadedTurnOffset = result.offset;
+    state.loadedTurnQuery = query.get("q");
+    state.loadedTurnOrder = query.get("order");
     state.turnsDirty = false;
     renderTurns();
   } catch (error) {
@@ -525,10 +659,12 @@ async function loadTurns() {
 async function selectTurn(index, fromNavigation = false) {
   if (!fromNavigation) gates.navigation.invalidate();
   const changed = state.selected !== index;
+  if (changed) state.flowInspected = "prompt";
   state.selected = index;
   state.follow =
     index === (state.meta?.latest_active ?? state.meta?.turn_count - 1) &&
-    !$("prompt-search").value;
+    !$("prompt-search").value &&
+    state.presentation !== "flow";
   if (state.follow) state.seenCount = state.meta?.turn_count || 0;
   renderTurns();
   renderMetadata();
@@ -772,6 +908,7 @@ function renderItems() {
     fragment.append(more);
   }
   container.replaceChildren(fragment);
+  updateFlow();
 }
 
 async function loadDetail(preserve) {
@@ -781,12 +918,15 @@ async function loadDetail(preserve) {
     index = state.selected;
   state.detailLoading = true;
   state.detailDirty = true;
+  state.flowError = false;
   if (!preserve) {
     gates.items.invalidate();
     state.activityLoading = false;
     $("article").replaceChildren(element("p", "empty", "正在读取这一轮…"));
     $("copy-turn").disabled = true;
     $("jump-final").disabled = true;
+    state.detail = null;
+    updateFlow();
   }
   try {
     const itemStart = preserve ? state.itemStart : 0;
@@ -849,6 +989,7 @@ async function loadDetail(preserve) {
       key === state.key &&
       index === state.selected
     ) {
+      state.flowError = true;
       if (!preserve)
         $("article").replaceChildren(
           element(
@@ -858,9 +999,13 @@ async function loadDetail(preserve) {
           ),
         );
       failed(error);
+      updateFlow();
     }
   } finally {
-    if (gates.detail.current(request)) state.detailLoading = false;
+    if (gates.detail.current(request)) {
+      state.detailLoading = false;
+      updateFlow();
+    }
   }
 }
 
@@ -901,14 +1046,20 @@ async function loadMoreItems(requestedOffset = state.nextItem) {
       : [...state.items, ...result.items];
     state.nextItem = result.next_offset;
     if (window.replace)
-      $("activity-summary")?.scrollIntoView({ block: "start" });
+      (state.presentation === "flow"
+        ? $("process-path")
+        : $("activity-summary")
+      )?.scrollIntoView({ block: "start" });
   } catch (error) {
     if (gates.items.current(request) && key === state.key) failed(error);
   } finally {
     if (gates.items.current(request)) {
       state.activityLoading = false;
       renderItems();
-      $("activity-more")?.focus({ preventScroll: true });
+      (state.presentation === "flow"
+        ? $("flow-after") || $("flow-before")
+        : $("activity-more")
+      )?.focus({ preventScroll: true });
     }
   }
 }
@@ -944,6 +1095,13 @@ async function copyTurn() {
 }
 
 function jumpFinal() {
+  if (state.presentation === "flow" && !$("reader").hidden) {
+    state.flowInspected = "final";
+    updateFlow();
+    $("flow-inspector")?.focus({ preventScroll: true });
+    $("flow-inspector")?.scrollIntoView({ block: "nearest" });
+    return;
+  }
   const final = $("final-answer");
   if (!final || $("reader").hidden) return;
   final.scrollIntoView({ block: "start", behavior: "instant" });
@@ -998,6 +1156,19 @@ function schedulePoll() {
 }
 
 async function moveSelection(direction) {
+  const flowFocus = Boolean(document.activeElement?.closest("#question-path"));
+  if (
+    flowFocus &&
+    (state.loadedTurnOrder !== "chronological" ||
+      state.loadedTurnOffset !== state.turnOffset ||
+      state.loadedTurnQuery !== $("prompt-search").value)
+  )
+    return;
+  const focusedTurn = document.activeElement?.dataset.flowTurn;
+  const anchor =
+    flowFocus && focusedTurn !== undefined
+      ? Number(focusedTurn)
+      : state.selected;
   const request = gates.navigation.next();
   const context = {
     view: gates.view.capture(),
@@ -1037,20 +1208,16 @@ async function moveSelection(direction) {
     return;
   }
   if (!context.query.trim()) {
-    const target = chronologicalTarget(direction, state.selected, state.meta);
+    const target = chronologicalTarget(direction, anchor, state.meta);
     if (target === null) return;
     state.turnOffset = pageFor(target);
     await Promise.all([loadTurns(), selectTurn(target, true)]);
     if (!current()) return;
-    const node = [...$("turns").children].find(
-      (item) => item.dataset.turn === String(target),
-    );
-    node?.focus({ preventScroll: true });
-    node?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    focusTurn(target, flowFocus);
     return;
   }
   if (!state.turnTotal) return;
-  let position = state.turns.findIndex((turn) => turn.index === state.selected);
+  let position = state.turns.findIndex((turn) => turn.index === anchor);
   let absolute = state.turnOffset + Math.max(0, position);
   absolute =
     direction === "start"
@@ -1073,15 +1240,17 @@ async function moveSelection(direction) {
   if (!turn) return;
   await selectTurn(turn.index, true);
   if (!current()) return;
-  const node = [...$("turns").children].find(
-    (item) => item.dataset.turn === String(turn.index),
-  );
-  node?.focus({ preventScroll: true });
-  node?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  focusTurn(turn.index, flowFocus);
 }
 
 function keyboard(event) {
-  if (event.ctrlKey || event.metaKey || event.altKey || event.isComposing)
+  if (
+    event.defaultPrevented ||
+    event.ctrlKey ||
+    event.metaKey ||
+    event.altKey ||
+    event.isComposing
+  )
     return;
   if ($("help").open || $("copy-fallback").open) return;
   const active = document.activeElement;
@@ -1105,6 +1274,11 @@ function keyboard(event) {
     return;
   }
   if (typing) return;
+  if (event.key === "v" && !$("reader").hidden) {
+    event.preventDefault();
+    setPresentation(state.presentation === "flow" ? "reading" : "flow");
+    return;
+  }
   if ($("reading-area").contains(active) && pausesFollow(event.key)) {
     state.follow = false;
     renderMetadata();
@@ -1152,9 +1326,11 @@ function keyboard(event) {
   }
   const focus = $("reader").hidden
     ? "picker"
-    : $("reading-area").contains(active)
-      ? "reader"
-      : "directory";
+    : $("question-path")?.contains(active)
+      ? "directory"
+      : $("reading-area").contains(active)
+        ? "reader"
+        : "directory";
   const action = navigation(event.key, focus);
   if (!action) return;
   event.preventDefault();
@@ -1164,7 +1340,8 @@ function keyboard(event) {
   }
   state.follow = false;
   renderMetadata();
-  const area = $("reading-area");
+  const area =
+    active?.closest(".flow-inspector, .process-path") || $("reading-area");
   area.scrollTo({
     top:
       action.direction === "start"
@@ -1215,6 +1392,8 @@ for (const [id, change] of [
   });
 }
 $("back").addEventListener("click", showPicker);
+$("view-reading").addEventListener("click", () => setPresentation("reading"));
+$("view-flow").addEventListener("click", () => setPresentation("flow"));
 $("brand-home").addEventListener("click", showPicker);
 $("jump-final").addEventListener("click", jumpFinal);
 $("latest").addEventListener("click", jumpLatest);

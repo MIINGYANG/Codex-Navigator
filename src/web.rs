@@ -394,6 +394,10 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
             "text/javascript; charset=utf-8",
             include_str!("../web/state.mjs"),
         )),
+        "/flow.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../web/flow.js"),
+        )),
         _ => None,
     };
     if let Some((content_type, body)) = resource {
@@ -722,7 +726,17 @@ impl Backend {
                 Ok(v) => v,
                 Err(e) => return e,
             };
-            let indices = open.index.search(query.get("q").map_or("", String::as_str));
+            let mut indices = open.index.search(query.get("q").map_or("", String::as_str));
+            match query.get("order").map(String::as_str) {
+                Some("chronological") => indices.sort_unstable(),
+                None | Some("relevance") => {}
+                _ => {
+                    return ApiReply::error(
+                        StatusCode::BAD_REQUEST,
+                        "order 必须是 chronological 或 relevance",
+                    )
+                }
+            }
             let turns: Vec<_> = indices
                 .iter()
                 .skip(offset)

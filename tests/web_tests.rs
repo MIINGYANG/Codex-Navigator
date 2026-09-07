@@ -239,7 +239,7 @@ fn web_static_assets_and_security_headers_expose_no_session_data() {
     );
     let original = fs::read(&path).unwrap();
     let server = Server::start(root, &[]);
-    for path in ["/", "/app.js", "/app.css"] {
+    for path in ["/", "/app.js", "/app.css", "/state.mjs", "/flow.js"] {
         let response = server.request("GET", path, &[]);
         assert_eq!(response.status, 200, "{path}");
         assert!(!response.text().contains("private-prompt-marker"));
@@ -649,6 +649,33 @@ fn web_turn_directory_is_bounded_and_refresh_discovers_new_main_sessions() {
                 .as_array()
                 .is_some_and(|sessions| sessions.len() == 2)
     });
+}
+
+#[test]
+fn web_flow_search_orders_before_pagination_without_changing_relevance_default() {
+    let root = TempDir::new().unwrap();
+    let mut records = vec![meta("flow-order")];
+    records.extend((0..120).map(|index| user(&format!("shared question {index}"))));
+    let path = fixture(root.path(), "flow-order", &records);
+    let original = fs::read(&path).unwrap();
+    let server = Server::start(root, &[]);
+    let key = server.key("flow-order");
+    server.loaded(&key, 120);
+    let route = format!("/api/session/{key}/turns?q=shared");
+    assert_eq!(server.get(&route).json()["turns"][0]["index"], 119);
+    let first = server
+        .get(&format!("{route}&order=chronological&limit=100"))
+        .json();
+    assert_eq!(first["total"], 120);
+    assert_eq!(first["turns"][0]["index"], 0);
+    assert_eq!(first["turns"][99]["index"], 99);
+    let next = server
+        .get(&format!("{route}&order=chronological&offset=100"))
+        .json();
+    assert_eq!(next["turns"][0]["index"], 100);
+    assert_eq!(next["turns"][19]["index"], 119);
+    assert_eq!(server.get(&format!("{route}&order=invalid")).status, 400);
+    assert_eq!(fs::read(path).unwrap(), original);
 }
 
 #[test]

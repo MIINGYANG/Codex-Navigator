@@ -4,8 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test web/*.test.mjs",
-    "lint": "eslint web/ scripts/web_qa.mjs",
-    "format:check": "prettier --check web/ scripts/web_qa.mjs eslint.config.mjs package.json"
+    "lint": "eslint web/ scripts/web_qa.mjs scripts/flow_qa.mjs",
+    "format:check": "prettier --check web/ scripts/web_qa.mjs scripts/flow_qa.mjs eslint.config.mjs package.json"
   },
   "devDependencies": {
     "eslint": "10.10.0",

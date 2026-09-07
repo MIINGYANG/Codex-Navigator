@@ -113,6 +113,14 @@
         <div class="reading-toolbar">
           <span id="breadcrumb"></span>
           <div class="reading-actions">
+            <div class="view-switch" role="group" aria-label="查看方式">
+              <button id="view-reading" aria-pressed="true" type="button">
+                阅读
+              </button>
+              <button id="view-flow" aria-pressed="false" type="button">
+                问题脉络
+              </button>
+            </div>
             <button id="copy-turn" type="button">复制整轮</button
             ><button id="jump-final" type="button">
               最终回复 <kbd>f</kbd> ↓
@@ -121,6 +129,12 @@
         </div>
         <div id="load-status" class="load-status" role="status"></div>
         <article id="article" class="article"></article>
+        <section
+          id="flow-view"
+          class="flow-view"
+          aria-label="问题脉络"
+          hidden
+        ></section>
       </section>
       <footer class="keybar">
         <div class="keys">
@@ -148,6 +162,8 @@
         <dd>当前区域开头 / 结尾</dd>
         <dt><kbd>f</kbd></dt>
         <dd>定位当前轮最终回复</dd>
+        <dt><kbd>v</kbd></dt>
+        <dd>切换阅读 / 问题脉络；脉络图内方向键选择问题或步骤</dd>
         <dt><kbd>[</kbd> / <kbd>]</kbd></dt>
         <dd>上一轮 / 下一轮</dd>
         <dt><kbd>c</kbd> / <kbd>C</kbd></dt>

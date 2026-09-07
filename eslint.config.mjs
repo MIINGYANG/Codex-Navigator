@@ -1,6 +1,11 @@
 export default [
   {
-    files: ["web/**/*.js", "web/**/*.mjs", "scripts/web_qa.mjs"],
+    files: [
+      "web/**/*.js",
+      "web/**/*.mjs",
+      "scripts/web_qa.mjs",
+      "scripts/flow_qa.mjs",
+    ],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",
