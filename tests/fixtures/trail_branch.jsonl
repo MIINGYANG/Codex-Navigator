@@ -1,0 +1,11 @@
+{"type":"session_meta","payload":{"id":"synthetic-trail","source":"cli","cwd":"/synthetic/project"}}
+{"type":"turn_context","payload":{"turn_id":"start"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"如何更清楚地回看本地对话？"}}
+{"type":"response_item","payload":{"type":"reasoning","summary":[{"text":"PRIVATE_REASONING"}]}}
+{"type":"turn_context","payload":{"turn_id":"next","parent_turn_id":"start"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"怎样快速定位一个具体问题？"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"怎样快速定位一个具体问题？"}]}}
+{"type":"turn_context","payload":{"turn_id":"detail","parent_turn_id":"next"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"点击问题时能同时看到完整原文吗？"}}
+{"type":"turn_context","payload":{"turn_id":"branch","parent_turn_id":"start"}}
+{"type":"event_msg","payload":{"type":"user_message","message":"另一条分支：如何保证会话文件只读？"}}

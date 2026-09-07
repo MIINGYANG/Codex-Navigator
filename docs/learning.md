@@ -105,3 +105,9 @@
 **Key insight:** 以真实问题序号和已有活动记录建立两层路径，缺口和省略要显式标注，不能把相邻记录或工具日志包装成内部思维或因果。搜索排名不是时间顺序，脉络必须在服务端分页前按记录顺序排序，保留阅读页原来的相关性排序。
 **Details / snippet:** v1.3.0 采用问题轨道与有界步骤/原文面板，新增 order=chronological 与12项纯投影测试；空轮询不重绘，无关问题更新保留完整工作区 DOM。跨页按焦点而非旧selected导航，局部 g/G 滚动局部面板，v 切回阅读页恢复可见焦点。158 Rust +30前端测试、格式/lint、release、宽窄浏览器和终端验收通过；未写真实会话、不调用 AI。
 **Tags:** #web #navigation #visualization #read-only #verification
+
+## 2026-09-08 — 可验证的问题画布与真实浏览器几何
+**Question:** 如何按新规格和参考图交付完整只读问题画布，同时保留旧导航器？
+**Key insight:** 图只消费可确定的顺序和明确父问题字段；fork记录序号、root_turn_id和子代理父线程不是可互换的关系。复用Rust解析和服务、内嵌ReactFlow资源可保留单binary安装；实时解析、全局索引和视口状态要分别控制，不因一个文件追加而重扫全库或重置历史阅读。
+**Details / snippet:** 175 Rust +53前端测试、fmt/clippy/lint/typecheck、release/隔离离线安装、三档真实Chrome与旧Web/终端回归通过。DOMRect不能用spread复制getter字段；小地图需同时配置内部尺寸和点击回调。移动/中屏聚焦使用扣除抽屉后的可见区域，live revision不触发重新居中；初次加载与大批live读取分开跟踪。1000问题只渲染可见6卡，约1.25秒首次可读为本机测试值而非跨平台承诺。参考材料保留本地，用户截图仅含合成数据，未改真实Codex会话、不push。
+**Tags:** #question-trail #react-flow #geometry #streaming #privacy #verification

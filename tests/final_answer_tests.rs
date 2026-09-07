@@ -223,6 +223,7 @@ fn evicted_prompt_remains_searchable_copyable_and_explicit_in_viewer() {
 #[test]
 fn picker_and_header_identify_sessions_and_watching_without_implying_execution() {
     let identity = SessionIdentity {
+        has_fork_lineage: false,
         kind: SessionKind::Subagent,
         parent_id: Some("parent-123456789".into()),
         agent_label: Some("reviewer".into()),

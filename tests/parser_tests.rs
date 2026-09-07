@@ -76,6 +76,23 @@ fn parser_unbounded_identifiers_do_not_enter_turn_identity_index() {
 }
 
 #[test]
+fn parser_parent_relationship_is_explicit_bounded_and_never_inferred_from_root_or_fork() {
+    let session = records(&[
+        json!({"type":"session_meta","payload":{"id":"fork","forked_from_id":"parent-session","forked_from_ordinal_exclusive":2}}),
+        json!({"type":"turn_context","payload":{"turn_id":"a","root_turn_id":"root"}}),
+        user("same topic"),
+        json!({"type":"turn_context","payload":{"turn_id":"b","parent_turn_id":"a"}}),
+        user("same topic"),
+        json!({"type":"turn_context","payload":{"turn_id":"c","parent_turn_id":"x".repeat(1000)}}),
+        user("same topic"),
+    ]);
+    assert!(session.meta.identity.has_fork_lineage);
+    assert_eq!(session.turns[0].parent_turn_id, None);
+    assert_eq!(session.turns[1].parent_turn_id.as_deref(), Some("a"));
+    assert_eq!(session.turns[2].parent_turn_id, None);
+}
+
+#[test]
 fn parser_minimal_session_and_metadata() {
     let session = parse(include_str!("fixtures/minimal.jsonl"));
     assert_eq!(session.meta.id, "synthetic-session");

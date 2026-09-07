@@ -702,6 +702,170 @@ fn web_cache_eviction_reloads_with_new_generation_and_correct_session() {
     );
 }
 
+#[test]
+fn trail_graph_search_are_deterministic_prompt_only_and_do_not_evict_live_sessions() {
+    let root = TempDir::new().unwrap();
+    let branch_path = fixture(root.path(), "synthetic-trail", &[]);
+    fs::write(&branch_path, include_str!("fixtures/trail_branch.jsonl")).unwrap();
+    fixture(
+        root.path(),
+        "other",
+        &[
+            meta("other"),
+            user("crosssession keyword marker"),
+            json!({"type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"ASSISTANT_ONLY_SECRET"}]}}),
+        ],
+    );
+    fixture(root.path(), "third", &[meta("third"), user("third prompt")]);
+    let original = fs::read(&branch_path).unwrap();
+    let server = Server::start(root, &[]);
+    let key = server.key("synthetic-trail");
+    let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+        v["loading"] == false
+    });
+    assert_eq!(graph["nodes"].as_array().unwrap().len(), 4);
+    assert_eq!(graph["edges"][2]["source"], "q1");
+    assert_eq!(graph["edges"][2]["type"], "branch");
+    assert!(!graph.to_string().contains("PRIVATE_REASONING"));
+    let results = server.wait("/api/trail/search?q=crosssession", |v| {
+        v["loading"] == false
+    });
+    assert_eq!(results["results"].as_array().unwrap().len(), 1);
+    assert_eq!(results["results"][0]["nodeId"], "q1");
+    assert_eq!(
+        server
+            .get("/api/trail/search?q=ASSISTANT_ONLY_SECRET")
+            .json()["results"],
+        json!([])
+    );
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["generation"],
+        graph["generation"]
+    );
+    assert_eq!(
+        server
+            .request("GET", "/api/trail/search?q=secret", &[])
+            .status,
+        403
+    );
+    assert_eq!(
+        server
+            .request("GET", &format!("/api/trail/events?session={key}"), &[])
+            .status,
+        403
+    );
+    assert_eq!(server.get("/api/trail/session/notregistered").status, 404);
+    assert_eq!(fs::read(&branch_path).unwrap(), original);
+}
+
+#[test]
+fn trail_sse_updates_only_complete_appended_records_and_is_header_authenticated() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(root.path(), "live", &[meta("live"), user("first question")]);
+    let server = Server::start(root, &[]);
+    let key = server.key("live");
+    server.loaded(&key, 1);
+    let mut stream = TcpStream::connect(&server.address).unwrap();
+    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    write!(stream,"GET /api/trail/events?session={key} HTTP/1.1\r\nHost: {}\r\nX-Codex-Nav-Token: {}\r\nConnection: close\r\n\r\n",server.address,server.token).unwrap();
+    let mut reader = BufReader::new(stream);
+    fn event(reader: &mut BufReader<TcpStream>) -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(
+                reader.read_line(&mut line).unwrap() > 0,
+                "SSE ended unexpectedly"
+            );
+            if let Some(json) = line.strip_prefix("data: ") {
+                return serde_json::from_str(json.trim()).unwrap();
+            }
+        }
+    }
+    assert_eq!(event(&mut reader)["turn_count"], 1);
+    let mut writer = OpenOptions::new().append(true).open(&path).unwrap();
+    writer.write_all(b"{malformed}\n").unwrap();
+    let malformed = event(&mut reader);
+    assert_eq!(malformed["turn_count"], 1);
+    assert_eq!(malformed["stats"]["malformed_records"], 1);
+    let record = user("second question").to_string();
+    let split = record.len() / 2;
+    writer.write_all(&record.as_bytes()[..split]).unwrap();
+    thread::sleep(Duration::from_millis(200));
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    writer.write_all(&record.as_bytes()[split..]).unwrap();
+    writer.write_all(b"\n").unwrap();
+    let deadline = Instant::now() + DEADLINE;
+    loop {
+        let value = event(&mut reader);
+        if value["turn_count"] == 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline);
+    }
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"][1]["title"],
+        "second question"
+    );
+}
+
+#[test]
+fn trail_embedded_assets_allow_only_inline_style_attributes_not_inline_scripts() {
+    let server = Server::start(TempDir::new().unwrap(), &[]);
+    for path in [
+        "/trail/",
+        "/trail/assets/trail.js",
+        "/trail/assets/trail.css",
+    ] {
+        let response = server.request("GET", path, &[]);
+        assert_eq!(response.status, 200);
+        let csp = &response.headers["content-security-policy"];
+        assert!(csp.contains("script-src 'self';"));
+        assert!(csp.contains("style-src-attr 'unsafe-inline';"));
+        assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+    }
+}
+
+#[test]
+fn trail_sse_connection_budget_does_not_starve_regular_api_requests() {
+    let root = TempDir::new().unwrap();
+    fixture(root.path(), "live", &[meta("live"), user("question")]);
+    let server = Server::start(root, &[]);
+    let key = server.key("live");
+    server.loaded(&key, 1);
+    let mut readers = Vec::new();
+    for _ in 0..8 {
+        let mut stream = TcpStream::connect(&server.address).unwrap();
+        stream.set_read_timeout(Some(DEADLINE)).unwrap();
+        write!(stream,"GET /api/trail/events?session={key} HTTP/1.1\r\nHost: {}\r\nX-Codex-Nav-Token: {}\r\nConnection: close\r\n\r\n",server.address,server.token).unwrap();
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        assert!(line.contains("200 OK"));
+        readers.push(reader);
+    }
+    assert_eq!(server.get("/api/health").json()["ok"], true);
+    assert_eq!(
+        server
+            .get(&format!("/api/trail/events?session={key}"))
+            .status,
+        503
+    );
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    drop(readers);
+}
+
 #[cfg(unix)]
 #[test]
 fn web_ctrl_c_gracefully_stops_server_and_session_worker() {

@@ -5,6 +5,7 @@ export default [
       "web/**/*.mjs",
       "scripts/web_qa.mjs",
       "scripts/flow_qa.mjs",
+      "scripts/trail_qa.mjs",
     ],
     languageOptions: {
       ecmaVersion: "latest",

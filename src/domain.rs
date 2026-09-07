@@ -33,6 +33,8 @@ pub struct SessionIdentity {
     pub kind: SessionKind,
     pub parent_id: Option<String>,
     pub agent_label: Option<String>,
+    /// Persisted session lineage; not a parent-question relationship.
+    pub has_fork_lineage: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -86,6 +88,8 @@ pub struct UserPrompt {
 pub struct Turn {
     pub ordinal: usize,
     pub id: Option<String>,
+    /// Only an explicit persisted parent_turn_id, never root_turn_id or inferred text.
+    pub parent_turn_id: Option<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
     pub prompt: UserPrompt,

@@ -1,0 +1,275 @@
+.qt-canvas {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #fbfdff;
+}
+.qt-canvas .react-flow__node-question {
+  border-radius: 14px;
+  transition: opacity 90ms ease;
+}
+.qt-canvas .react-flow__node-question:focus-visible {
+  outline: 3px solid #2563eb;
+  outline-offset: 6px;
+}
+.qt-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  width: 280px;
+  min-height: 108px;
+  box-sizing: border-box;
+  padding: 16px 15px 14px;
+  color: #111827;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 14px;
+  box-shadow:
+    0 1px 2px #1018280a,
+    0 6px 20px #1018280d;
+  cursor: grab;
+  transition:
+    transform 280ms ease,
+    box-shadow 280ms ease,
+    border-color 90ms ease;
+}
+.qt-card.is-new {
+  animation: qt-node-appear 250ms ease backwards;
+}
+.react-flow__node-question:hover .qt-card {
+  transform: translateY(-2px);
+  box-shadow:
+    0 3px 5px #10182808,
+    0 10px 28px #10182816;
+}
+.qt-card.is-selected {
+  border: 2px solid #3b82f6;
+  padding: 15px 14px 13px;
+  box-shadow:
+    0 0 0 4px #3b82f614,
+    0 8px 28px #3b82f61f;
+}
+.qt-card-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 42px;
+  height: 42px;
+  border-radius: 12px;
+  color: #3b82f6;
+  background: #eff6ff;
+}
+.qt-card-icon.is-latest {
+  color: #10b981;
+  background: #ecfdf5;
+}
+.qt-card-copy {
+  flex: 1;
+  min-width: 0;
+}
+.qt-card-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  height: 44px;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 22px;
+  letter-spacing: -0.1px;
+}
+.qt-card-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 7px;
+  margin-top: 9px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #98a2b3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.qt-card-meta > span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+}
+.qt-card-meta i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #10b981;
+}
+.qt-canvas .react-flow__handle {
+  width: 7px;
+  height: 7px;
+  min-width: 0;
+  min-height: 0;
+  border: 2px solid #fff;
+  background: #bdcada;
+  pointer-events: none;
+}
+.qt-canvas .is-selected .react-flow__handle {
+  background: #3b82f6;
+  width: 9px;
+  height: 9px;
+}
+.qt-connection {
+  transition:
+    stroke 90ms ease,
+    opacity 90ms ease,
+    stroke-width 90ms ease;
+}
+.qt-connection.is-sequence {
+  stroke-dasharray: 6 5;
+  animation: qt-line-flow 5s linear infinite;
+}
+.qt-edge-label {
+  position: absolute;
+  padding: 3px 7px;
+  border: 1px solid #dbeafe;
+  border-radius: 6px;
+  background: #fff;
+  color: #2563eb;
+  font-size: 10px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.qt-minimap {
+  width: 160px !important;
+  height: 92px !important;
+  overflow: hidden;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  box-shadow:
+    0 2px 6px #10182808,
+    0 6px 18px #10182805;
+}
+.qt-legend {
+  position: absolute;
+  left: 20px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 17px;
+  padding: 12px 14px;
+  border: 1px solid #eef2f6;
+  border-radius: 10px;
+  background: #ffffffed;
+  color: #667085;
+  box-shadow: 0 2px 5px #10182806;
+  font-size: 11px;
+  pointer-events: none;
+}
+.qt-legend span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.qt-legend i {
+  display: block;
+  width: 23px;
+}
+.qt-legend-sequence {
+  border-top: 2px dashed #3b82f6;
+}
+.qt-legend-branch {
+  border-top: 2px solid #cbd5e1;
+}
+.qt-legend i.qt-legend-selected {
+  width: 10px;
+  height: 9px;
+  border: 1.5px solid #3b82f6;
+  border-radius: 2px;
+  background: #eff6ff;
+}
+.qt-return-map {
+  position: absolute;
+  top: 15px;
+  right: 18px;
+  padding: 8px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 8px;
+  background: #fff;
+  color: #2563eb;
+  font-size: 12px;
+  box-shadow: 0 2px 5px #10182806;
+  cursor: pointer;
+}
+.qt-tooltip {
+  position: fixed;
+  z-index: 80;
+  width: 260px;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #ffffff12;
+  border-radius: 9px;
+  color: #fff;
+  background: #202733f5;
+  box-shadow: 0 5px 18px #10182826;
+  pointer-events: none;
+  font-size: 12px;
+  line-height: 19px;
+}
+.qt-tooltip p {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 0 0 8px;
+}
+.qt-tooltip time,
+.qt-tooltip span,
+.qt-tooltip small {
+  display: block;
+  color: #bdc4d1;
+  font-size: 10px;
+}
+.qt-tooltip small {
+  margin-top: 4px;
+  color: #94a3b8;
+}
+@keyframes qt-line-flow {
+  to {
+    stroke-dashoffset: -44;
+  }
+}
+@keyframes qt-node-appear {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+@media (max-width: 899px) {
+  .qt-canvas .qt-minimap {
+    display: none;
+  }
+  .qt-legend {
+    left: 12px;
+    bottom: 12px;
+    padding: 10px 12px;
+    gap: 12px;
+    font-size: 10px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .qt-card,
+  .qt-canvas .react-flow__node-question,
+  .qt-connection {
+    transition: none;
+  }
+  .qt-card.is-new,
+  .qt-connection.is-sequence {
+    animation: none;
+  }
+}

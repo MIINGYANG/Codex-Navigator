@@ -55,6 +55,10 @@ pub fn parse_identity(payload: &Value) -> SessionIdentity {
         kind,
         parent_id,
         agent_label,
+        has_fork_lineage: payload
+            .get("forked_from_id")
+            .and_then(Value::as_str)
+            .is_some_and(|id| !id.is_empty() && id.len() <= 256),
     }
 }
 

@@ -36,6 +36,9 @@ use tokio::{
     sync::{oneshot, OwnedSemaphorePermit, Semaphore},
 };
 
+#[path = "trail.rs"]
+mod trail;
+
 const MAX_OPEN: usize = 2;
 const MAX_SESSIONS: usize = 20_000;
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
@@ -53,6 +56,7 @@ struct HttpState {
     token: String,
     sender: mpsc::SyncSender<ApiRequest>,
     capacity: Arc<Semaphore>,
+    events_capacity: Arc<Semaphore>,
 }
 
 struct ApiRequest {
@@ -127,10 +131,26 @@ impl ApiReply {
 
 /// Starts an independent local reader, never a Codex subprocess or terminal wrapper.
 pub fn run(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
+    run_inner(home, cwd, config, options, false)
+}
+
+/// Question Trail shares the verified read-only transport, not a second session parser.
+pub fn run_trail(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
+    run_inner(home, cwd, config, options, true)
+}
+
+fn run_inner(
+    home: PathBuf,
+    cwd: PathBuf,
+    config: Config,
+    options: WebOptions,
+    is_trail: bool,
+) -> Result<()> {
     let mut entropy = [0_u8; 32];
     getrandom::fill(&mut entropy).map_err(|_| anyhow::anyhow!("Cannot obtain secure Web token"))?;
     let token: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
     let mut backend = Backend::new(home, cwd, config, options.all);
+    backend.is_trail = is_trail;
     if let Some(session) = options.session {
         let path = discovery::resolve_session(&backend.home, &session, &backend.config)?;
         backend.initial_session = Some(backend.register(path, true)?);
@@ -144,7 +164,8 @@ pub fn run(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> 
             .await
             .context("Cannot bind local Web port; use --port to select another port")?;
         let authority = listener.local_addr()?.to_string();
-        let url = format!("http://{authority}/#token={token}");
+        let entry = if is_trail { "/trail/" } else { "/" };
+        let url = format!("http://{authority}{entry}#token={token}");
         let (sender, receiver) = mpsc::sync_channel(4);
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stop = stopped.clone();
@@ -171,9 +192,15 @@ pub fn run(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> 
             token,
             sender,
             capacity: Arc::new(Semaphore::new(4)),
+            events_capacity: Arc::new(Semaphore::new(8)),
         };
         let router = Router::new().fallback(handle).with_state(state);
-        println!("Codex Navigator Web — 本机只读，Ctrl+C 停止\n{url}");
+        let name = if is_trail {
+            "Codex Question Trail"
+        } else {
+            "Codex Navigator Web"
+        };
+        println!("{name} — 本机只读，无 AI/API 调用，Ctrl+C 停止\n{url}");
         std::io::stdout().flush()?;
         if !options.no_open {
             if let Err(error) = open_browser(&url) {
@@ -381,6 +408,18 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
         return ApiReply::error(StatusCode::BAD_REQUEST, "GET 请求不能携带正文").response();
     }
     let resource = match path {
+        "/trail/" | "/trail" | "/trail/index.html" => Some((
+            "text/html; charset=utf-8",
+            include_str!("../trail/dist/index.html"),
+        )),
+        "/trail/assets/trail.js" => Some((
+            "text/javascript; charset=utf-8",
+            include_str!("../trail/dist/assets/trail.js"),
+        )),
+        "/trail/assets/trail.css" => Some((
+            "text/css; charset=utf-8",
+            include_str!("../trail/dist/assets/trail.css"),
+        )),
         "/" | "/index.html" => Some((
             "text/html; charset=utf-8",
             include_str!("../web/index.html"),
@@ -401,15 +440,22 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
         _ => None,
     };
     if let Some((content_type, body)) = resource {
-        return ApiReply {
+        let mut response = ApiReply {
             status: StatusCode::OK,
             content_type,
             body: body.as_bytes().to_vec(),
         }
         .response();
+        if path.starts_with("/trail") {
+            response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"));
+        }
+        return response;
     }
     if !path.starts_with("/api/") {
         return ApiReply::error(StatusCode::NOT_FOUND, "页面不存在").response();
+    }
+    if path == "/api/trail/events" {
+        return trail_events(state, request).await;
     }
     let Ok(permit) = state.capacity.clone().try_acquire_owned() else {
         return ApiReply::error(StatusCode::SERVICE_UNAVAILABLE, "请求繁忙，请稍后重试").response();
@@ -438,6 +484,76 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
 struct Registered {
     path: PathBuf,
     explicit: bool,
+}
+
+async fn trail_events(state: HttpState, request: Request) -> Response {
+    let Ok(Query(query)) = Query::<HashMap<String, String>>::try_from_uri(request.uri()) else {
+        return ApiReply::error(StatusCode::BAD_REQUEST, "查询参数无效").response();
+    };
+    let Some(key) = query.get("session").filter(|key| {
+        !key.is_empty() && key.len() <= 64 && key.bytes().all(|c| c.is_ascii_alphanumeric())
+    }) else {
+        return ApiReply::error(StatusCode::BAD_REQUEST, "需要有效的 session").response();
+    };
+    let Ok(permit) = state.events_capacity.clone().try_acquire_owned() else {
+        return ApiReply::error(StatusCode::SERVICE_UNAVAILABLE, "实时连接已达到上限").response();
+    };
+    let path = format!("/api/session/{key}");
+    let started = std::time::Instant::now();
+    let stream = futures_util::stream::unfold(
+        (state, path, None::<Vec<u8>>, started, permit),
+        |(state, path, last, started, permit)| async move {
+            if started.elapsed() > Duration::from_secs(50) {
+                return None;
+            }
+            if last.is_some() {
+                tokio::time::sleep(Duration::from_millis(750)).await;
+            }
+            let (reply, receiver) = oneshot::channel();
+            if state
+                .sender
+                .try_send(ApiRequest {
+                    path: path.clone(),
+                    query: HashMap::new(),
+                    reply,
+                })
+                .is_err()
+            {
+                return None;
+            }
+            let Ok(Ok(reply)) = tokio::time::timeout(Duration::from_secs(5), receiver).await else {
+                return None;
+            };
+            if reply.status != StatusCode::OK {
+                return None;
+            }
+            let changed = last.as_ref() != Some(&reply.body);
+            let data = if changed {
+                format!(
+                    "event: change\ndata: {}\n\n",
+                    String::from_utf8_lossy(&reply.body)
+                )
+            } else {
+                ": keep-alive\n\n".into()
+            };
+            Some((
+                Ok::<_, std::convert::Infallible>(Bytes::from(data)),
+                (state, path, Some(reply.body), started, permit),
+            ))
+        },
+    );
+    let mut response = ApiReply {
+        status: StatusCode::OK,
+        content_type: "text/event-stream; charset=utf-8",
+        body: Vec::new(),
+    }
+    .response();
+    response.headers_mut().remove(header::CONTENT_LENGTH);
+    response
+        .headers_mut()
+        .insert("x-accel-buffering", HeaderValue::from_static("no"));
+    *response.body_mut() = Body::from_stream(stream);
+    response
 }
 
 struct OpenSession {
@@ -493,6 +609,7 @@ impl OpenSession {
 type ScanResult = (bool, Result<Vec<SessionSummary>>);
 
 struct Backend {
+    is_trail: bool,
     home: PathBuf,
     cwd: PathBuf,
     config: Config,
@@ -507,11 +624,125 @@ struct Backend {
     open: HashMap<String, OpenSession>,
     lru: VecDeque<String>,
     next_generation: u64,
+    search: trail::SearchSnapshot,
+    search_worker: Option<mpsc::Receiver<(trail::SearchSnapshot, bool)>>,
+    search_signature: HashMap<String, (u64, Option<std::time::SystemTime>)>,
+    search_checked: std::time::Instant,
+    search_deferred: bool,
 }
 
 impl Backend {
+    fn ensure_search(&mut self) {
+        if self.search_worker.is_some()
+            || (!self.search_signature.is_empty()
+                && self.search_checked.elapsed() < Duration::from_secs(3))
+        {
+            return;
+        }
+        self.search_checked = std::time::Instant::now();
+        self.search_deferred = false;
+        if self.listings[1].is_none() {
+            self.start_scan(true);
+            return;
+        }
+        let keys: Vec<_> = self.listings[1]
+            .as_ref()
+            .into_iter()
+            .flatten()
+            .filter_map(|v| v["key"].as_str().map(str::to_owned))
+            .collect();
+        let mut signature = HashMap::new();
+        let mut paths = Vec::new();
+        let mut reusable = std::collections::HashSet::new();
+        for key in keys {
+            if !self.safe_target(&key) {
+                continue;
+            }
+            let path = &self.registered[&key].path;
+            if let Ok(meta) = path.metadata() {
+                let stamp = (meta.len(), meta.modified().ok());
+                if self
+                    .search_signature
+                    .get(&key)
+                    .is_none_or(|(old_len, _)| *old_len < stamp.0)
+                {
+                    reusable.insert(key.clone());
+                }
+                if self.search_signature.get(&key) != Some(&stamp) {
+                    paths.push((key.clone(), path.clone()));
+                }
+                signature.insert(key, stamp);
+            }
+        }
+        if signature != self.search_signature {
+            self.search
+                .rows
+                .retain(|row| signature.contains_key(&row.key));
+            self.search
+                .counts
+                .retain(|key, _| signature.contains_key(key));
+            self.search_signature = signature;
+            paths.retain(|(key, _)| {
+                let deferred = reusable.contains(key)
+                    && self.open.get(key).is_some_and(|open| {
+                        open.error.is_none()
+                            && (!open.initialized
+                                || open.offset != open.total
+                                || !self
+                                    .search_signature
+                                    .get(key)
+                                    .is_some_and(|(len, _)| *len == open.total))
+                    });
+                if deferred {
+                    // Preserve and budget the old rows while the existing reader catches up.
+                    self.search_signature.remove(key);
+                    self.search_deferred = true;
+                }
+                !deferred
+            });
+            let changed: std::collections::HashSet<_> =
+                paths.iter().map(|(key, _)| key.clone()).collect();
+            let unchanged = self
+                .search
+                .rows
+                .iter()
+                .filter(|row| !changed.contains(&row.key));
+            let mut retained = unchanged.clone().map(|row| row.searchable.len()).sum();
+            let mut rows = unchanged.count();
+            paths.retain(|(key, _)| {
+                if let Some(open) = self.open.get(key).filter(|open| {
+                    reusable.contains(key)
+                        && open.initialized
+                        && open.offset == open.total
+                        && open.error.is_none()
+                        && self
+                            .search_signature
+                            .get(key)
+                            .is_some_and(|(len, _)| *len == open.total)
+                }) {
+                    let snapshot = trail::project(&open.session, key, &mut retained, &mut rows);
+                    self.search.rows.retain(|row| row.key != *key);
+                    self.search.rows.extend(snapshot.rows);
+                    self.search.counts.extend(snapshot.counts);
+                    self.search.truncated |= snapshot.truncated;
+                    false
+                } else {
+                    true
+                }
+            });
+            if !paths.is_empty() {
+                self.search_worker = Some(trail::start_index(
+                    paths,
+                    self.config.clone(),
+                    retained,
+                    rows,
+                ));
+            }
+        }
+    }
     fn new(home: PathBuf, cwd: PathBuf, config: Config, default_all: bool) -> Self {
         Self {
+            is_trail: false,
             home,
             cwd,
             config,
@@ -526,6 +757,11 @@ impl Backend {
             open: HashMap::new(),
             lru: VecDeque::new(),
             next_generation: 1,
+            search: trail::SearchSnapshot::default(),
+            search_worker: None,
+            search_signature: HashMap::new(),
+            search_checked: std::time::Instant::now() - Duration::from_secs(10),
+            search_deferred: false,
         }
     }
 
@@ -595,7 +831,14 @@ impl Backend {
         if let Some((all, result)) = result {
             self.scan = None;
             match result {
-                Ok(sessions) => {
+                Ok(mut sessions) => {
+                    if self.is_trail {
+                        sessions.sort_by(|a, b| {
+                            b.updated_at
+                                .cmp(&a.updated_at)
+                                .then_with(|| a.id.cmp(&b.id))
+                        });
+                    }
                     let mut listing = Vec::new();
                     let mut truncated = sessions.len() > MAX_SESSIONS;
                     for summary in sessions.into_iter().take(MAX_SESSIONS) {
@@ -628,6 +871,21 @@ impl Backend {
             let open = self.open.get_mut(&key).expect("registered open session");
             while let Ok(update) = open.worker.updates.try_recv() {
                 open.apply(update);
+            }
+        }
+        while let Some((snapshot, done)) = self
+            .search_worker
+            .as_ref()
+            .and_then(|rx| rx.try_recv().ok())
+        {
+            self.search
+                .rows
+                .retain(|row| !snapshot.counts.contains_key(&row.key));
+            self.search.rows.extend(snapshot.rows);
+            self.search.counts.extend(snapshot.counts);
+            self.search.truncated |= snapshot.truncated;
+            if done {
+                self.search_worker = None;
             }
         }
     }
@@ -674,12 +932,42 @@ impl Backend {
 
     fn route(&mut self, path: &str, query: &HashMap<String, String>) -> ApiReply {
         self.tick();
+        if path == "/api/health" {
+            return ApiReply::json(json!({"ok":true,"readOnly":true,"localOnly":true}));
+        }
+        if path == "/api/trail/search" {
+            self.ensure_search();
+            let results = trail::search(&self.search, query.get("q").map_or("", String::as_str));
+            return ApiReply::json(
+                json!({"loading":self.search_worker.is_some() || self.search_deferred || self.scan.is_some(),"results":results,"truncated":self.search.truncated || results.len() >= 100}),
+            );
+        }
+        if let Some(key) = path
+            .strip_prefix("/api/trail/session/")
+            .filter(|key| !key.contains('/'))
+        {
+            let watch = self.config.watch;
+            let Ok(open) = self.get_session(key, false) else {
+                return ApiReply::error(
+                    StatusCode::NOT_FOUND,
+                    "会话不存在或文件不可读取，请刷新会话列表",
+                );
+            };
+            let (nodes, edges, notices) = trail::graph(&open.session);
+            let stats = &open.session.parse_stats;
+            return ApiReply::json(
+                json!({"key":key,"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices}),
+            );
+        }
         if path == "/api/info" {
             return ApiReply::json(
                 json!({"version":env!("CARGO_PKG_VERSION"),"watch":self.config.watch,"default_all":self.default_all,"initial_session":self.initial_session,"refresh_ms":750}),
             );
         }
         if path == "/api/sessions" {
+            if self.is_trail {
+                self.ensure_search();
+            }
             let all = match query.get("all").map(String::as_str) {
                 None => self.default_all,
                 Some("0") => false,
@@ -692,8 +980,17 @@ impl Backend {
             {
                 self.start_scan(all);
             }
+            let mut sessions = self.listings[i].clone().unwrap_or_default();
+            for summary in &mut sessions {
+                if let Some(count) = summary["key"]
+                    .as_str()
+                    .and_then(|key| self.search.counts.get(key))
+                {
+                    summary["turn_count"] = json!(count);
+                }
+            }
             return ApiReply::json(
-                json!({"loading":self.scan.as_ref().is_some_and(|(active,_)| *active == all)||self.pending[i],"error":self.scan_error[i],"sessions":self.listings[i].as_deref().unwrap_or(&[])}),
+                json!({"loading":self.scan.as_ref().is_some_and(|(active,_)| *active == all)||self.pending[i],"error":self.scan_error[i],"sessions":sessions}),
             );
         }
         let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
@@ -862,6 +1159,7 @@ mod tests {
             token: "a".repeat(64),
             sender,
             capacity: Arc::new(Semaphore::new(1)),
+            events_capacity: Arc::new(Semaphore::new(1)),
         }
     }
 
@@ -1008,6 +1306,145 @@ mod tests {
         assert_ne!(
             backend.get_session(&keys[0], false).unwrap().generation,
             original
+        );
+    }
+
+    #[test]
+    fn trail_index_replaces_only_changed_file_and_reuses_loaded_append() {
+        use std::io::Write;
+        let temp = tempfile::tempdir().unwrap();
+        let mut backend = Backend::new(
+            temp.path().into(),
+            temp.path().into(),
+            Config::default(),
+            true,
+        );
+        let mut keys = Vec::new();
+        let mut paths = Vec::new();
+        for text in ["unchanged marker", "changing marker"] {
+            let path = temp.path().join(format!("{}.jsonl", paths.len()));
+            std::fs::write(
+                &path,
+                format!(
+                    "{}\n",
+                    json!({"type":"event_msg","payload":{"type":"user_message","message":text}})
+                ),
+            )
+            .unwrap();
+            keys.push(backend.register(path.clone(), true).unwrap());
+            paths.push(path);
+        }
+        backend.listings[1] = Some(keys.iter().map(|key| json!({"key":key})).collect());
+        fn finish(backend: &mut Backend) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(5);
+            while backend.search_worker.is_some() {
+                backend.tick();
+                assert!(std::time::Instant::now() < deadline);
+                thread::sleep(Duration::from_millis(5));
+            }
+        }
+        backend.ensure_search();
+        finish(&mut backend);
+        let original = backend
+            .search
+            .rows
+            .iter()
+            .find(|row| row.key == keys[0])
+            .unwrap()
+            .searchable
+            .as_ptr();
+        let append = |text: &str| {
+            writeln!(
+                std::fs::OpenOptions::new()
+                    .append(true)
+                    .open(&paths[1])
+                    .unwrap(),
+                "{}",
+                json!({"type":"event_msg","payload":{"type":"user_message","message":text}})
+            )
+            .unwrap();
+        };
+        append("second change");
+        backend.search_checked -= Duration::from_secs(4);
+        backend.ensure_search();
+        assert_eq!(
+            backend.search.rows.len(),
+            2,
+            "old rows stay available during background replacement"
+        );
+        finish(&mut backend);
+        assert_eq!(backend.search.rows.len(), 3);
+        assert_eq!(
+            backend
+                .search
+                .rows
+                .iter()
+                .find(|row| row.key == keys[0])
+                .unwrap()
+                .searchable
+                .as_ptr(),
+            original,
+            "unchanged prompt allocation must be retained, not rebuilt"
+        );
+        assert_eq!(backend.search.counts[&keys[1]], 2);
+        append("third change from live model");
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            let open = backend.get_session(&keys[1], false).unwrap();
+            if open.initialized && open.session.turns.len() == 3 && open.offset == open.total {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            thread::sleep(Duration::from_millis(5));
+        }
+        backend.search_checked -= Duration::from_secs(4);
+        backend.ensure_search();
+        assert!(
+            backend.search_worker.is_none(),
+            "fully loaded changed file must not start another disk reader"
+        );
+        assert_eq!(backend.search.counts[&keys[1]], 3);
+        assert_eq!(backend.search.rows.len(), 4);
+        assert_eq!(
+            backend
+                .search
+                .rows
+                .iter()
+                .find(|row| row.key == keys[0])
+                .unwrap()
+                .searchable
+                .as_ptr(),
+            original
+        );
+    }
+
+    #[test]
+    fn trail_index_defers_to_an_active_incremental_reader_instead_of_rescanning() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("active.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}\n",
+                json!({"type":"event_msg","payload":{"type":"user_message","message":"loading"}})
+            ),
+        )
+        .unwrap();
+        let mut backend = Backend::new(
+            temp.path().into(),
+            temp.path().into(),
+            Config::default(),
+            true,
+        );
+        let key = backend.register(path, true).unwrap();
+        backend.listings[1] = Some(vec![json!({"key":key})]);
+        backend.get_session(&key, false).unwrap().initialized = false;
+        backend.ensure_search();
+        assert!(backend.search_deferred);
+        assert!(backend.search_worker.is_none());
+        assert!(
+            !backend.search_signature.contains_key(&key),
+            "the signature must remain pending until the active model catches up"
         );
     }
 

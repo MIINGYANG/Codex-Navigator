@@ -23,6 +23,7 @@ pub struct Parser {
     pub dirty: BTreeSet<usize>,
     active: Option<usize>,
     pending_id: Option<String>,
+    pending_parent: Option<String>,
     pending_time: Option<DateTime<Utc>>,
     turn_ids: HashMap<String, usize>,
     seq: usize,
@@ -46,6 +47,7 @@ impl Parser {
             dirty: BTreeSet::new(),
             active: None,
             pending_id: None,
+            pending_parent: None,
             pending_time: None,
             turn_ids: HashMap::new(),
             seq: 0,
@@ -163,6 +165,31 @@ impl Parser {
             "compacted" | "world_state" | "token_usage_record" => (),
             _ => self.session.parse_stats.unknown_records += 1,
         }
+        // Accept only an explicit relationship attached to a turn-bearing record.
+        // root_turn_id and fork record ordinals deliberately do not enter this model.
+        let turn_record = kind == "turn_context"
+            || matches!(
+                s(p, "type"),
+                "task_started" | "turn_started" | "user_message"
+            )
+            || (kind == "response_item" && s(p, "role") == "user");
+        if turn_record {
+            if let Some(parent) = p
+                .get("parent_turn_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty() && id.len() <= 256)
+            {
+                if matches!(kind, "turn_context" | "task_started" | "turn_started")
+                    || matches!(s(p, "type"), "task_started" | "turn_started")
+                {
+                    self.pending_parent = Some(parent.to_owned());
+                }
+                if let Some(i) = self.active {
+                    self.session.turns[i].parent_turn_id = Some(parent.to_owned());
+                    self.touch(i);
+                }
+            }
+        }
     }
     fn start(&mut self, id: Option<&str>, timestamp: Option<DateTime<Utc>>) {
         let id = id.filter(|id| !id.is_empty() && id.len() <= 256);
@@ -170,6 +197,7 @@ impl Parser {
             return;
         }
         self.pending_id = id.map(str::to_owned);
+        self.pending_parent = None;
         self.pending_time = timestamp;
         self.active = id.and_then(|id| self.turn_ids.get(id).copied());
     }
@@ -370,6 +398,7 @@ impl Parser {
             self.session.turns.push(Turn {
                 ordinal: i + 1,
                 id: self.pending_id.clone(),
+                parent_turn_id: self.pending_parent.take(),
                 started_at: self.pending_time.or(timestamp),
                 status: TurnStatus::InProgress,
                 ..Turn::default()
