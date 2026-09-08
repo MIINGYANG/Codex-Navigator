@@ -10,7 +10,7 @@ import { promisify } from "node:util";
 
 const execute = promisify(execFile);
 
-const binary = path.resolve(process.argv[2] || "target/release/codex-trail");
+const binary = path.resolve(process.argv[2] || "target/release/codex-nav");
 const fixture = await fs.mkdtemp(path.join(os.tmpdir(), "codex-trail-qa-"));
 const home = path.join(fixture, "codex");
 const dir = path.join(home, "sessions");
@@ -97,12 +97,20 @@ for (const [name, text] of rollouts) {
 await fs.utimes(files.get("main"), new Date(), new Date(Date.now() + 60000));
 const child = spawn(
   binary,
-  ["--port", "0", "--no-open", "--codex-home", home],
+  [
+    ...(path.basename(binary) === "codex-trail" ? [] : ["--web"]),
+    "--port",
+    "0",
+    "--no-open",
+    "--codex-home",
+    home,
+  ],
   {
     env: { ...process.env, XDG_CONFIG_HOME: path.join(fixture, "config") },
     stdio: ["ignore", "pipe", "pipe"],
   },
 );
+const services = new Set([child]);
 let childError = "";
 child.stderr.on("data", (chunk) => {
   childError += chunk;
@@ -153,6 +161,48 @@ const selected = (index) =>
   `!!document.querySelector('[data-question-id="q${index}"].is-selected')&&document.querySelector('.question-heading h3')?.textContent.startsWith('${index}.')&&Number.isFinite(parseFloat(document.querySelector('[aria-label="缩放比例"]').textContent))`;
 const settled = (target) =>
   evaluate(target, "new Promise(r=>setTimeout(()=>r(true),400))");
+async function setTheme(target, mode) {
+  await evaluate(
+    target,
+    `(()=>{const e=document.querySelector('select[aria-label="主题"]');e.value=${JSON.stringify(mode)};e.dispatchEvent(new Event('change',{bubbles:true}));return true})()`,
+  );
+  await wait(
+    target,
+    `document.querySelector('select[aria-label="主题"]').value===${JSON.stringify(mode)}&&document.documentElement.dataset.theme===${mode === "system" ? "(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')" : JSON.stringify(mode)}&&localStorage.getItem('questionTrail.theme')===${JSON.stringify(mode)}`,
+    `主题 ${mode} 已应用并保存`,
+  );
+  await settled(target);
+}
+async function assertDarkSurfaces(target, selectors) {
+  const colors = await evaluate(
+    target,
+    `(${JSON.stringify(selectors)}).map(selector=>{const e=document.querySelector(selector);if(!e)throw new Error('Missing dark surface '+selector);const style=getComputedStyle(e);return {selector,background:style.backgroundColor,color:style.color}})`,
+  );
+  for (const { selector, background, color } of colors) {
+    const rgb = background.match(/[\d.]+/g)?.map(Number);
+    assert.ok(
+      rgb &&
+        rgb.length >= 3 &&
+        (rgb.length === 3 || rgb[3] === 1) &&
+        rgb.slice(0, 3).every((channel) => channel < 120),
+      `深色表面不残留亮底 ${selector}: ${background}`,
+    );
+    const foreground = color.match(/[\d.]+/g)?.map(Number);
+    assert.ok(
+      foreground && foreground.slice(0, 3).some((channel) => channel > 130),
+      `深色文字可读 ${selector}: ${color}`,
+    );
+  }
+}
+async function reloadAndCheckTheme(target, mode) {
+  const url = await evaluate(target, "location.href");
+  await cdp(`/navigate?target=${target}&url=${encodeURIComponent(url)}`);
+  await wait(
+    target,
+    `document.querySelectorAll('.qt-card').length>=6&&document.querySelector('select[aria-label="主题"]')?.value===${JSON.stringify(mode)}&&document.documentElement.dataset.theme===${mode === "system" ? "(matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light')" : JSON.stringify(mode)}`,
+    `刷新后 ${mode} 主题与会话恢复`,
+  );
+}
 async function choose(target, text) {
   await evaluate(
     target,
@@ -259,7 +309,7 @@ try {
     child.stdout.on("data", (chunk) => {
       output += chunk;
       const match = output.match(
-        /http:\/\/127\.0\.0\.1:\d+\/trail\/#token=[a-zA-Z0-9_-]+/,
+        /http:\/\/127\.0\.0\.1:\d+\/(?:trail\/)?#token=[a-zA-Z0-9_-]+/,
       );
       if (match) {
         clearTimeout(timeout);
@@ -310,6 +360,7 @@ try {
       "真实响应式视口",
     );
     console.log(`窗口请求 ${width}px，实际验收 ${actualWidth}px`);
+    await setTheme(target, width === 390 ? "dark" : "light");
     assert.ok(
       await evaluate(
         target,
@@ -481,6 +532,78 @@ try {
       const shot = await screenshot(target, `trail-${actualWidth}.png`);
       await fs.mkdir(path.resolve("docs/images"), { recursive: true });
       await fs.copyFile(shot, path.resolve("docs/images/question-trail.png"));
+      await reloadAndCheckTheme(target, "light");
+      await click(target, '[data-question-id="q2"]');
+      await wait(target, selected(2), "刷新后重新选择 Q2");
+      await settled(target);
+      const themeViewport = await evaluate(
+        target,
+        "document.querySelector('.react-flow__viewport').style.transform",
+      );
+      await setTheme(target, "dark");
+      assert.ok(await evaluate(target, selected(2)), "切换主题保持选中问题");
+      assert.equal(
+        await evaluate(
+          target,
+          "document.querySelector('.react-flow__viewport').style.transform",
+        ),
+        themeViewport,
+        "切换主题保持历史视口",
+      );
+      await assertDarkSurfaces(target, [
+        ".session-sidebar",
+        ".topbar",
+        ".qt-canvas",
+        ".react-flow",
+        ".react-flow__background",
+        ".qt-card",
+        ".detail-panel",
+        ".qt-minimap",
+        "select[aria-label=主题]",
+      ]);
+      assert.equal(
+        await evaluate(
+          target,
+          "getComputedStyle(document.querySelector('.react-flow__background')).backgroundColor",
+        ),
+        await evaluate(
+          target,
+          "getComputedStyle(document.querySelector('.qt-canvas')).backgroundColor",
+        ),
+        "React Flow 背景 SVG 沿用主题背景，不回退库默认黑色",
+      );
+      await key(target, "f");
+      await settled(target);
+      const darkShot = await screenshot(
+        target,
+        `trail-dark-${actualWidth}.png`,
+      );
+      await fs.copyFile(
+        darkShot,
+        path.resolve("docs/images/question-trail-dark.png"),
+      );
+      await key(target, "k", "body", { ctrlKey: true });
+      await wait(
+        target,
+        "!!document.querySelector('.search-dialog[open]')",
+        "深色全局搜索",
+      );
+      await input(target, '[aria-label="搜索问题原文"]', "Sidecar");
+      await wait(
+        target,
+        "!!document.querySelector('.search-result')",
+        "深色搜索结果",
+      );
+      await assertDarkSurfaces(target, [".search-dialog"]);
+      await screenshot(target, "trail-dark-search.png");
+      await key(target, "Escape", '[aria-label="搜索问题原文"]');
+      await reloadAndCheckTheme(target, "dark");
+      await setTheme(target, "system");
+      await reloadAndCheckTheme(target, "system");
+      await setTheme(target, "light");
+      console.log(
+        "PASS 主题：浅色/深色/跟随系统、三态刷新保存、卡片/面板/小地图/搜索无亮底",
+      );
       await evaluate(
         target,
         "(()=>{window.__linearStart=performance.now();return true})()",
@@ -678,6 +801,15 @@ try {
         "临时提示消失后截图",
       );
       await screenshot(target, "trail-390.png");
+      await assertDarkSurfaces(target, [
+        ".topbar",
+        ".qt-canvas",
+        ".react-flow",
+        ".react-flow__background",
+        ".qt-card",
+        ".detail-panel",
+      ]);
+      console.log("PASS 390px 深色主题：详情/卡片/画布可读，无横向溢出");
       await evaluate(
         target,
         "(()=>{window.__historyNode=document.querySelector('[data-question-id=q2]');window.__historyViewport=document.querySelector('.react-flow__viewport').style.transform;window.__historyPrompt=document.querySelector('.prompt-text');return true})()",
@@ -776,6 +908,109 @@ try {
     await cdp(`/close?target=${target}`);
     tabs.delete(target);
   }
+  const staticHome = path.join(fixture, "static-codex");
+  const staticDir = path.join(staticHome, "sessions");
+  await fs.mkdir(staticDir, { recursive: true });
+  const staticPath = path.join(staticDir, "rollout-target.jsonl");
+  const latestPath = path.join(staticDir, "rollout-latest.jsonl");
+  const staticText =
+    meta("trail-static-target", "specified-session") +
+    turn(1, "静态指定会话：应优先于最近会话打开");
+  const latestText =
+    meta("trail-static-latest", "latest-session") +
+    turn(1, "最近会话：指定启动时不应自动打开这一条");
+  await fs.writeFile(staticPath, staticText);
+  await fs.writeFile(latestPath, latestText);
+  await fs.utimes(latestPath, new Date(), new Date(Date.now() + 120000));
+  const staticService = spawn(
+    path.basename(binary) === "codex-trail"
+      ? path.join(path.dirname(binary), "codex-nav")
+      : binary,
+    [
+      "--web",
+      "--port",
+      "0",
+      "--no-open",
+      "--no-watch",
+      "--codex-home",
+      staticHome,
+      "--session",
+      "trail-static-target",
+    ],
+    {
+      env: { ...process.env, XDG_CONFIG_HOME: path.join(fixture, "config") },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  services.add(staticService);
+  let staticError = "";
+  staticService.stderr.on("data", (chunk) => {
+    staticError += chunk;
+  });
+  const staticUrl = await new Promise((resolve, reject) => {
+    let output = "";
+    const timeout = setTimeout(
+      () => reject(new Error(`静态服务启动超时：${staticError}`)),
+      12000,
+    );
+    staticService.once("error", reject);
+    staticService.once("exit", () =>
+      reject(new Error(`静态服务退出：${staticError}`)),
+    );
+    staticService.stdout.on("data", (chunk) => {
+      output += chunk;
+      const match = output.match(
+        /http:\/\/127\.0\.0\.1:\d+\/(?:trail\/)?#token=[a-zA-Z0-9_-]+/,
+      );
+      if (match) {
+        clearTimeout(timeout);
+        resolve(match[0]);
+      }
+    });
+  });
+  const staticTab = (await cdp(`/new?url=${encodeURIComponent(staticUrl)}`))
+    .targetId;
+  tabs.add(staticTab);
+  await wait(
+    staticTab,
+    "document.querySelectorAll('.qt-card').length===1&&document.querySelector('.canvas-heading h1')?.textContent.includes('静态指定会话')&&document.querySelector('.local-status')?.textContent.includes('手动刷新')",
+    "--session 打开指定而非最新会话；--no-watch 显示手动刷新",
+  );
+  const staticAppend = turn(2, "手动刷新后才能显示的第二个问题");
+  await fs.appendFile(staticPath, staticAppend);
+  await evaluate(staticTab, "new Promise(r=>setTimeout(()=>r(true),2500))");
+  assert.equal(
+    await evaluate(staticTab, "document.querySelectorAll('.qt-card').length"),
+    1,
+    "--no-watch 不自动读取新增问题",
+  );
+  await click(staticTab, '[aria-label="刷新当前会话"]');
+  await wait(
+    staticTab,
+    "document.querySelectorAll('.qt-card').length===2",
+    "点击刷新才读取静态会话新增问题",
+  );
+  await click(staticTab, '[data-question-id="q2"]');
+  await wait(
+    staticTab,
+    "document.querySelector('.prompt-text')?.textContent.includes('手动刷新后才能显示')",
+    "刷新后的问题原文正确",
+  );
+  assert.equal(
+    await fs.readFile(staticPath, "utf8"),
+    staticText + staticAppend,
+    "静态会话仅存在脚本预期追加",
+  );
+  assert.equal(
+    await fs.readFile(latestPath, "utf8"),
+    latestText,
+    "最新会话保持只读",
+  );
+  await cdp(`/close?target=${staticTab}`);
+  tabs.delete(staticTab);
+  console.log(
+    "PASS --session 指定会话、--no-watch 静态保护、手动刷新增量、只读校验",
+  );
   const hash = (value) => createHash("sha256").update(value).digest("hex");
   for (const [name, text] of rollouts)
     assert.equal(
@@ -787,15 +1022,17 @@ try {
 } finally {
   for (const target of tabs)
     await cdp(`/close?target=${target}`).catch(() => {});
-  if (child.exitCode === null) {
-    child.kill("SIGINT");
-    await Promise.race([
-      once(child, "exit"),
-      new Promise((resolve) => {
-        setTimeout(resolve, 5000);
-      }),
-    ]);
-    if (child.exitCode === null) child.kill("SIGTERM");
+  for (const service of services) {
+    if (service.exitCode === null) {
+      service.kill("SIGINT");
+      await Promise.race([
+        once(service, "exit"),
+        new Promise((resolve) => {
+          setTimeout(resolve, 5000);
+        }),
+      ]);
+      if (service.exitCode === null) service.kill("SIGTERM");
+    }
   }
   console.log(`合成验收目录与截图保留：${fixture}`);
 }

@@ -48,6 +48,7 @@ import {
 } from "./graph";
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
+import { useTheme } from "./ThemeSwitch";
 
 export interface CanvasHandle {
   fit(): void;
@@ -199,6 +200,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
   },
   ref,
 ) {
+  const { resolved: theme } = useTheme();
   const flow = useReactFlow<CardNode, TrailEdge>();
   const container = useRef<HTMLDivElement>(null);
   const focusFrame = useRef<number | undefined>(undefined);
@@ -475,10 +477,10 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         positions.current.get(edge.target) ?? { x: 0, y: 0 },
       );
       const stroke = emphasized
-        ? "#2563EB"
+        ? "var(--qt-accent-strong)"
         : edge.type === "sequence"
-          ? "#3B82F6"
-          : "#CBD5E1";
+          ? "var(--qt-accent)"
+          : "var(--qt-branch)";
       return {
         ...edge,
         type: "trail",
@@ -540,6 +542,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       }}
     >
       <ReactFlow<CardNode, TrailEdge>
+        colorMode={theme}
         nodes={visibleNodes}
         edges={edges}
         nodeTypes={nodeTypes}
@@ -620,7 +623,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
           variant={BackgroundVariant.Dots}
           gap={20}
           size={0.8}
-          color="#DDE8F5"
+          color="var(--qt-grid)"
         />
         <MiniMap
           style={{ width: 160, height: 92 }}
@@ -634,8 +637,13 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
             });
           }}
           className="qt-minimap"
-          nodeColor={(node) => (node.id === selectedId ? "#3B82F6" : "#DCE5F1")}
-          maskColor="rgba(248,250,252,.65)"
+          bgColor="var(--qt-panel)"
+          nodeColor={(node) =>
+            node.id === selectedId
+              ? "var(--qt-accent)"
+              : "var(--qt-minimap-node)"
+          }
+          maskColor="var(--qt-minimap-mask)"
           nodeStrokeWidth={0}
           nodeBorderRadius={4}
         />

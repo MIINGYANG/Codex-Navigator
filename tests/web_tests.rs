@@ -67,8 +67,20 @@ fn fixture(root: &Path, id: &str, records: &[Value]) -> PathBuf {
 
 impl Server {
     fn start(root: TempDir, arguments: &[&str]) -> Self {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_codex-nav"))
-            .args(["--web", "--port", "0", "--no-open", "--all"])
+        Self::start_entry(root, arguments, false)
+    }
+
+    fn start_entry(root: TempDir, arguments: &[&str], alias: bool) -> Self {
+        let mut command = Command::new(if alias {
+            env!("CARGO_BIN_EXE_codex-trail")
+        } else {
+            env!("CARGO_BIN_EXE_codex-nav")
+        });
+        if !alias {
+            command.arg("--web");
+        }
+        let mut child = command
+            .args(["--port", "0", "--no-open"])
             .args(arguments)
             .env("CODEX_HOME", root.path().join("codex"))
             .env("XDG_CONFIG_HOME", root.path().join("config"))
@@ -239,7 +251,14 @@ fn web_static_assets_and_security_headers_expose_no_session_data() {
     );
     let original = fs::read(&path).unwrap();
     let server = Server::start(root, &[]);
-    for path in ["/", "/app.js", "/app.css", "/state.mjs", "/flow.js"] {
+    for path in [
+        "/",
+        "/trail/",
+        "/trail/assets/trail.js",
+        "/trail/assets/trail.css",
+        "/trail/theme-init.js",
+        "/theme-init.js",
+    ] {
         let response = server.request("GET", path, &[]);
         assert_eq!(response.status, 200, "{path}");
         assert!(!response.text().contains("private-prompt-marker"));
@@ -263,6 +282,14 @@ fn web_static_assets_and_security_headers_expose_no_session_data() {
     assert_eq!(info["watch"], true);
     assert_eq!(info["default_all"], true);
     assert!(info["initial_session"].is_null());
+    assert!(!server.get("/api/info").headers["content-security-policy"].contains("unsafe-inline"));
+    for path in ["/app.js", "/app.css", "/state.mjs", "/flow.js"] {
+        assert_eq!(
+            server.request("GET", path, &[]).status,
+            404,
+            "legacy asset {path}"
+        );
+    }
     assert_eq!(fs::read(path).unwrap(), original);
     assert!(!server.root.path().join("config").exists());
 }
@@ -561,12 +588,106 @@ fn web_no_watch_requires_manual_refresh_and_remains_read_only() {
         1
     );
     assert_eq!(
-        server.get(&format!("/api/session/{key}?refresh=1")).status,
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        server
+            .get(&format!("/api/trail/session/{key}?refresh=1"))
+            .status,
         200
     );
     server.loaded(&key, 2);
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(fs::read(path).unwrap(), expected);
     assert!(!server.root.path().join("config").exists());
+}
+
+#[test]
+fn web_no_watch_search_snapshot_changes_only_after_manual_refresh() {
+    let root = TempDir::new().unwrap();
+    let path = fixture(
+        root.path(),
+        "main",
+        &[meta("main"), user("original keyword")],
+    );
+    let server = Server::start(root, &["--no-watch"]);
+    let key = server.key("main");
+    server.loaded(&key, 1);
+    server.wait("/api/trail/search?q=original", |value| {
+        value["loading"] == false
+            && value["results"]
+                .as_array()
+                .is_some_and(|items| items.len() == 1)
+    });
+    OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(lines(&[user("appended keyword")]).as_bytes())
+        .unwrap();
+    // Exceed the normal search index refresh interval: manual mode must still
+    // return its existing snapshot and leave the opened graph unchanged.
+    thread::sleep(Duration::from_millis(3100));
+    assert_eq!(
+        server.get("/api/trail/search?q=appended").json()["results"],
+        json!([])
+    );
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    server.get(&format!("/api/trail/session/{key}?refresh=1"));
+    server.loaded(&key, 2);
+    server.get("/api/sessions?refresh=1");
+    server.sessions();
+    let updated = server.wait("/api/trail/search?q=appended", |value| {
+        value["loading"] == false
+            && value["results"]
+                .as_array()
+                .is_some_and(|items| items.len() == 1)
+    });
+    assert_eq!(updated["results"][0]["title"], "appended keyword");
+}
+
+#[test]
+fn web_defaults_to_all_dates_and_latest_project_not_current_directory() {
+    let root = TempDir::new().unwrap();
+    fixture(
+        root.path(),
+        "related",
+        &[meta("related"), user("current project")],
+    );
+    let archive = root.path().join("codex/sessions/2010/01/01");
+    fs::create_dir_all(&archive).unwrap();
+    fs::write(archive.join("rollout-unrelated.jsonl"), lines(&[
+        json!({"type":"session_meta","payload":{"id":"unrelated","cwd":"/synthetic/other","source":"cli"}}),
+        user("other project newest question"),
+    ])).unwrap();
+    fs::write(
+        root.path().join("codex/session_index.jsonl"),
+        lines(&[
+            json!({"id":"related","thread_name":"Related","updated_at":"2090-01-01T00:00:00Z"}),
+            json!({"id":"unrelated","thread_name":"Unrelated","updated_at":"2090-01-02T00:00:00Z"}),
+        ]),
+    )
+    .unwrap();
+    let server = Server::start(root, &["--cwd", "/synthetic/project"]);
+    let sessions = server.wait("/api/sessions", |value| value["loading"] == false);
+    assert_eq!(sessions["sessions"].as_array().unwrap().len(), 2);
+    assert_eq!(sessions["sessions"][0]["id"], "unrelated");
 }
 
 #[test]
@@ -818,9 +939,12 @@ fn trail_sse_updates_only_complete_appended_records_and_is_header_authenticated(
 fn trail_embedded_assets_allow_only_inline_style_attributes_not_inline_scripts() {
     let server = Server::start(TempDir::new().unwrap(), &[]);
     for path in [
+        "/",
         "/trail/",
         "/trail/assets/trail.js",
         "/trail/assets/trail.css",
+        "/trail/theme-init.js",
+        "/theme-init.js",
     ] {
         let response = server.request("GET", path, &[]);
         assert_eq!(response.status, 200);
@@ -828,6 +952,53 @@ fn trail_embedded_assets_allow_only_inline_style_attributes_not_inline_scripts()
         assert!(csp.contains("script-src 'self';"));
         assert!(csp.contains("style-src-attr 'unsafe-inline';"));
         assert!(!csp.contains("script-src 'self' 'unsafe-inline'"));
+    }
+    let bootstrap = server.request("GET", "/trail/theme-init.js", &[]);
+    assert_eq!(
+        bootstrap.body,
+        server.request("GET", "/theme-init.js", &[]).body
+    );
+    assert!(bootstrap.headers["content-type"].starts_with("text/javascript"));
+    let html = server.request("GET", "/", &[]).text();
+    assert!(html.contains("src=\"/trail/theme-init.js\""));
+    assert!(!html.contains("<script>"));
+}
+
+#[test]
+fn web_and_trail_entrypoints_serve_the_same_app_and_honor_explicit_session() {
+    for alias in [false, true] {
+        let root = TempDir::new().unwrap();
+        let path = fixture(
+            root.path(),
+            "selected",
+            &[meta("selected"), user("selected question")],
+        );
+        fixture(
+            root.path(),
+            "other",
+            &[meta("other"), user("other question")],
+        );
+        let original = fs::read(&path).unwrap();
+        let server = Server::start_entry(
+            root,
+            &["--session", path.to_str().unwrap(), "--no-watch"],
+            alias,
+        );
+        let home = server.request("GET", "/", &[]);
+        assert_eq!(home.status, 200);
+        assert!(home.text().contains("/trail/assets/trail.js"));
+        for path in ["/index.html", "/trail", "/trail/", "/trail/index.html"] {
+            assert_eq!(server.request("GET", path, &[]).body, home.body);
+        }
+        let info = server.get("/api/info").json();
+        assert_eq!(info["default_all"], true);
+        assert_eq!(info["watch"], false);
+        let key = info["initial_session"].as_str().unwrap();
+        let graph = server.wait(&format!("/api/trail/session/{key}"), |value| {
+            value["loading"] == false
+        });
+        assert_eq!(graph["nodes"][0]["title"], "selected question");
+        assert_eq!(fs::read(path).unwrap(), original);
     }
 }
 

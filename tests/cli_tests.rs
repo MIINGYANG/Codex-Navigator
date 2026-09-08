@@ -17,6 +17,7 @@ fn cli_help_version_and_noninteractive_message() {
     let help = String::from_utf8(help.stdout).unwrap();
     for option in [
         "--session",
+        "--codex-home",
         "--cwd",
         "--all",
         "--no-watch",
@@ -37,6 +38,30 @@ fn cli_help_version_and_noninteractive_message() {
     assert!(String::from_utf8(tui.stderr)
         .unwrap()
         .contains("interactive terminal"));
+}
+
+#[test]
+fn cli_codex_home_is_global_and_rejects_empty_path() {
+    use clap::Parser;
+    use codex_navigator::cli::Cli;
+
+    for args in [
+        vec!["codex-nav", "--codex-home", "/synthetic/home", "doctor"],
+        vec!["codex-nav", "doctor", "--codex-home", "/synthetic/home"],
+        vec!["codex-nav", "--web", "--codex-home", "/synthetic/home"],
+    ] {
+        let cli = Cli::try_parse_from(args).unwrap();
+        assert_eq!(
+            cli.codex_home.unwrap(),
+            std::path::PathBuf::from("/synthetic/home")
+        );
+    }
+    for args in [
+        vec!["codex-nav", "--codex-home", "", "doctor"],
+        vec!["codex-nav", "doctor", "--codex-home", ""],
+    ] {
+        assert!(Cli::try_parse_from(args).is_err());
+    }
 }
 
 #[test]

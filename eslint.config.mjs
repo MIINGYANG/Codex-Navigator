@@ -1,12 +1,6 @@
 export default [
   {
-    files: [
-      "web/**/*.js",
-      "web/**/*.mjs",
-      "scripts/web_qa.mjs",
-      "scripts/flow_qa.mjs",
-      "scripts/trail_qa.mjs",
-    ],
+    files: ["trail/public/**/*.js", "scripts/trail_qa.mjs"],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",

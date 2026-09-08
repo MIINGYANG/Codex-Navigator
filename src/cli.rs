@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{builder::TypedValueParser, Parser, Subcommand};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -8,6 +8,11 @@ use std::path::PathBuf;
     about = "Read-only local navigator for Codex sessions"
 )]
 pub struct Cli {
+    /// Codex data directory (otherwise CODEX_HOME, then ~/.codex).
+    #[arg(long, value_name = "PATH", global = true, value_parser = clap::builder::PathBufValueParser::new().try_map(|path: PathBuf| {
+        if path.as_os_str().is_empty() { Err("--codex-home must not be empty") } else { Ok(path) }
+    }))]
+    pub codex_home: Option<PathBuf>,
     /// Open a session by exact ID, unique ID prefix, or rollout file path.
     #[arg(long, value_name = "SESSION_ID_OR_PATH")]
     pub session: Option<String>,
@@ -17,10 +22,10 @@ pub struct Cli {
     /// Include all dates in the main-session picker (subagents and unknown sources stay hidden).
     #[arg(long)]
     pub all: bool,
-    /// Disable automatic updates; use r to refresh manually.
+    /// Disable automatic updates; use r in the terminal or Refresh in the web UI.
     #[arg(long)]
     pub no_watch: bool,
-    /// Open the local read-only web reader instead of the terminal interface.
+    /// Open the local Question Trail web reader instead of the terminal interface.
     #[arg(long)]
     pub web: bool,
     /// Loopback web port; use 0 to choose an available port automatically.

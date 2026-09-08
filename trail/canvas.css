@@ -5,14 +5,19 @@
   min-height: 0;
   height: 100%;
   overflow: hidden;
-  background: #fbfdff;
+  background: var(--qt-canvas);
+}
+.qt-canvas .react-flow {
+  background: var(--qt-canvas);
+  --xy-background-color: var(--qt-canvas);
+  --xy-minimap-background-color-props: var(--qt-panel);
 }
 .qt-canvas .react-flow__node-question {
   border-radius: 14px;
   transition: opacity 90ms ease;
 }
 .qt-canvas .react-flow__node-question:focus-visible {
-  outline: 3px solid #2563eb;
+  outline: 3px solid var(--qt-accent-strong);
   outline-offset: 6px;
 }
 .qt-card {
@@ -23,13 +28,13 @@
   min-height: 108px;
   box-sizing: border-box;
   padding: 16px 15px 14px;
-  color: #111827;
-  background: #fff;
-  border: 1px solid #e5e7eb;
+  color: var(--qt-text);
+  background: var(--qt-card);
+  border: 1px solid var(--qt-border);
   border-radius: 14px;
   box-shadow:
-    0 1px 2px #1018280a,
-    0 6px 20px #1018280d;
+    0 1px 2px rgb(var(--qt-shadow-rgb) / 3.9%),
+    0 6px 20px rgb(var(--qt-shadow-rgb) / 5.1%);
   cursor: grab;
   transition:
     transform 280ms ease,
@@ -42,15 +47,15 @@
 .react-flow__node-question:hover .qt-card {
   transform: translateY(-2px);
   box-shadow:
-    0 3px 5px #10182808,
-    0 10px 28px #10182816;
+    0 3px 5px rgb(var(--qt-shadow-rgb) / 3.1%),
+    0 10px 28px rgb(var(--qt-shadow-rgb) / 8.6%);
 }
 .qt-card.is-selected {
-  border: 2px solid #3b82f6;
+  border: 2px solid var(--qt-accent);
   padding: 15px 14px 13px;
   box-shadow:
-    0 0 0 4px #3b82f614,
-    0 8px 28px #3b82f61f;
+    0 0 0 4px rgb(var(--qt-accent-rgb) / 7.8%),
+    0 8px 28px rgb(var(--qt-accent-rgb) / 12.2%);
 }
 .qt-card-icon {
   display: grid;
@@ -58,12 +63,12 @@
   flex: 0 0 42px;
   height: 42px;
   border-radius: 12px;
-  color: #3b82f6;
-  background: #eff6ff;
+  color: var(--qt-accent);
+  background: var(--qt-accent-soft);
 }
 .qt-card-icon.is-latest {
-  color: #10b981;
-  background: #ecfdf5;
+  color: var(--qt-success);
+  background: var(--qt-success-soft);
 }
 .qt-card-copy {
   flex: 1;
@@ -89,7 +94,7 @@
   margin-top: 9px;
   font-size: 11px;
   line-height: 16px;
-  color: #98a2b3;
+  color: var(--qt-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
 }
@@ -103,19 +108,19 @@
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: #10b981;
+  background: var(--qt-success);
 }
 .qt-canvas .react-flow__handle {
   width: 7px;
   height: 7px;
   min-width: 0;
   min-height: 0;
-  border: 2px solid #fff;
-  background: #bdcada;
+  border: 2px solid var(--qt-card);
+  background: var(--qt-handle);
   pointer-events: none;
 }
 .qt-canvas .is-selected .react-flow__handle {
-  background: #3b82f6;
+  background: var(--qt-accent);
   width: 9px;
   height: 9px;
 }
@@ -132,10 +137,10 @@
 .qt-edge-label {
   position: absolute;
   padding: 3px 7px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--qt-accent-border);
   border-radius: 6px;
-  background: #fff;
-  color: #2563eb;
+  background: var(--qt-panel);
+  color: var(--qt-accent-strong);
   font-size: 10px;
   pointer-events: none;
   white-space: nowrap;
@@ -144,11 +149,11 @@
   width: 160px !important;
   height: 92px !important;
   overflow: hidden;
-  border: 1px solid #e5e7eb;
+  border: 1px solid var(--qt-border);
   border-radius: 10px;
   box-shadow:
-    0 2px 6px #10182808,
-    0 6px 18px #10182805;
+    0 2px 6px rgb(var(--qt-shadow-rgb) / 3.1%),
+    0 6px 18px rgb(var(--qt-shadow-rgb) / 2%);
 }
 .qt-legend {
   position: absolute;
@@ -158,11 +163,11 @@
   align-items: center;
   gap: 17px;
   padding: 12px 14px;
-  border: 1px solid #eef2f6;
+  border: 1px solid var(--qt-border-soft);
   border-radius: 10px;
-  background: #ffffffed;
-  color: #667085;
-  box-shadow: 0 2px 5px #10182806;
+  background: var(--qt-floating);
+  color: var(--qt-secondary);
+  box-shadow: 0 2px 5px rgb(var(--qt-shadow-rgb) / 2.4%);
   font-size: 11px;
   pointer-events: none;
 }
@@ -176,29 +181,29 @@
   width: 23px;
 }
 .qt-legend-sequence {
-  border-top: 2px dashed #3b82f6;
+  border-top: 2px dashed var(--qt-accent);
 }
 .qt-legend-branch {
-  border-top: 2px solid #cbd5e1;
+  border-top: 2px solid var(--qt-branch);
 }
 .qt-legend i.qt-legend-selected {
   width: 10px;
   height: 9px;
-  border: 1.5px solid #3b82f6;
+  border: 1.5px solid var(--qt-accent);
   border-radius: 2px;
-  background: #eff6ff;
+  background: var(--qt-accent-soft);
 }
 .qt-return-map {
   position: absolute;
   top: 15px;
   right: 18px;
   padding: 8px 12px;
-  border: 1px solid #dbeafe;
+  border: 1px solid var(--qt-accent-border);
   border-radius: 8px;
-  background: #fff;
-  color: #2563eb;
+  background: var(--qt-panel);
+  color: var(--qt-accent-strong);
   font-size: 12px;
-  box-shadow: 0 2px 5px #10182806;
+  box-shadow: 0 2px 5px rgb(var(--qt-shadow-rgb) / 2.4%);
   cursor: pointer;
 }
 .qt-tooltip {
@@ -207,11 +212,11 @@
   width: 260px;
   box-sizing: border-box;
   padding: 12px 14px;
-  border: 1px solid #ffffff12;
+  border: 1px solid var(--qt-tooltip-border);
   border-radius: 9px;
-  color: #fff;
-  background: #202733f5;
-  box-shadow: 0 5px 18px #10182826;
+  color: var(--qt-tooltip-text);
+  background: var(--qt-tooltip);
+  box-shadow: 0 5px 18px rgb(var(--qt-shadow-rgb) / 14.9%);
   pointer-events: none;
   font-size: 12px;
   line-height: 19px;
@@ -228,12 +233,12 @@
 .qt-tooltip span,
 .qt-tooltip small {
   display: block;
-  color: #bdc4d1;
+  color: var(--qt-tooltip-muted);
   font-size: 10px;
 }
 .qt-tooltip small {
   margin-top: 4px;
-  color: #94a3b8;
+  color: var(--qt-muted);
 }
 @keyframes qt-line-flow {
   to {

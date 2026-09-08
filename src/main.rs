@@ -83,7 +83,10 @@ fn run() -> Result<()> {
     );
     let mut config = Config::load()?;
     config.watch &= !cli.no_watch;
-    let home = discovery::resolve_codex_home()?;
+    let home = match cli.codex_home {
+        Some(path) => path,
+        None => discovery::resolve_codex_home()?,
+    };
     let cwd = cli
         .cwd
         .unwrap_or(std::env::current_dir().context("Cannot resolve current directory")?);

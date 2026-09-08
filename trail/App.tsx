@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import Canvas, { type CanvasHandle } from "./Canvas";
+import ThemeSwitch from "./ThemeSwitch";
 import type { QuestionGraph, QuestionNode } from "./graph";
 import { api, subscribe } from "./api";
 import {
@@ -112,6 +113,7 @@ export default function App() {
   const [zoom, setZoom] = useState(100);
   const [seen, setSeen] = useState(0);
   const [connected, setConnected] = useState(false);
+  const [watch, setWatch] = useState(true);
   const [toast, setToast] = useState("");
   const canvas = useRef<CanvasHandle>(null);
   const graphRef = useRef<GraphResponse | null>(null);
@@ -127,12 +129,28 @@ export default function App() {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let busy = false;
+    let configured = false;
+    let autoWatch = true;
     async function scan(rescan = false) {
       if (busy || controller.signal.aborted) return;
       busy = true;
       clearTimeout(timer);
       let delay = 15000;
       try {
+        if (!configured) {
+          const info = await api<{
+            watch: boolean;
+            initial_session: string | null;
+          }>("/api/info", controller.signal);
+          if (controller.signal.aborted) return;
+          autoWatch = info.watch;
+          setWatch(info.watch);
+          if (info.initial_session) {
+            initialSelection.current = true;
+            setKey(info.initial_session);
+          }
+          configured = true;
+        }
         const data = await api<{
           loading: boolean;
           error: string | null;
@@ -159,7 +177,10 @@ export default function App() {
       } finally {
         busy = false;
         if (!controller.signal.aborted)
-          timer = setTimeout(() => void scan(delay === 15000), delay);
+          timer = setTimeout(
+            () => void scan(autoWatch && delay === 15000),
+            delay,
+          );
       }
     }
     refreshSessions.current = () => void scan(true);
@@ -176,6 +197,7 @@ export default function App() {
     let busy = false;
     let again = false;
     let initializing = true;
+    let manualPending = false;
     graphRef.current = null;
     setGraph(null);
     setGraphError("");
@@ -185,8 +207,9 @@ export default function App() {
     setConnected(false);
     if (!key) return;
     const sessionKey = key;
-    async function refresh() {
+    async function refresh(manual = false) {
       if (controller.signal.aborted) return;
+      manualPending ||= manual;
       if (busy) {
         again = true;
         return;
@@ -194,8 +217,10 @@ export default function App() {
       busy = true;
       clearTimeout(timer);
       try {
+        const suffix = manualPending ? "?refresh=1" : "";
+        manualPending = false;
         const next = await api<GraphResponse>(
-          `/api/trail/session/${encodeURIComponent(sessionKey)}`,
+          `/api/trail/session/${encodeURIComponent(sessionKey)}${suffix}`,
           controller.signal,
         );
         if (controller.signal.aborted) return;
@@ -253,14 +278,20 @@ export default function App() {
         }
       }
     }
-    refreshGraph.current = () => void refresh();
+    refreshGraph.current = () => void refresh(true);
     void refresh();
-    void subscribe(key, controller.signal, () => void refresh(), setConnected);
+    if (watch)
+      void subscribe(
+        key,
+        controller.signal,
+        () => void refresh(),
+        setConnected,
+      );
     return () => {
       controller.abort();
       clearTimeout(timer);
     };
-  }, [key]);
+  }, [key, watch]);
 
   useEffect(() => {
     if (!toast) return;
@@ -379,7 +410,7 @@ export default function App() {
             <Route size={23} />
           </span>
           <div>
-            <strong>Question Trail</strong>
+            <strong>Codex Navigator</strong>
             <span>每个问题，都有来路</span>
           </div>
           <button
@@ -482,7 +513,7 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Question Trail 1.0</span>
+          <span className="version">Codex Navigator 2.0</span>
         </div>
       </aside>
 
@@ -511,16 +542,19 @@ export default function App() {
             <GitBranch size={17} />
             <span>问题脉络</span>
           </div>
+          <ThemeSwitch />
           <div
             className={`local-status ${connected ? "connected" : ""}`}
             title={
-              connected
-                ? "本机服务实时连接中"
-                : "正在连接本机服务；已加载内容仍可阅读"
+              !watch
+                ? "自动监控已关闭，点击刷新读取新增内容"
+                : connected
+                  ? "本机服务实时连接中"
+                  : "正在连接本机服务；已加载内容仍可阅读"
             }
           >
             <span />
-            {connected ? "本地实时" : "连接中"}
+            {!watch ? "手动刷新" : connected ? "本地实时" : "连接中"}
           </div>
         </header>
 
@@ -532,10 +566,16 @@ export default function App() {
                   我的会话 <ChevronRight size={12} />
                   <span>问题脉络</span>
                 </div>
-                <h1 title={titleOf(currentSession)}>
+                <h1
+                  title={
+                    currentSession
+                      ? titleOf(currentSession)
+                      : graph?.nodes[0]?.title
+                  }
+                >
                   {currentSession
                     ? titleOf(currentSession)
-                    : "把问题串起来，看清来路。"}
+                    : graph?.nodes[0]?.title || "把问题串起来，看清来路。"}
                 </h1>
                 <p>
                   {graph ? `${graph.nodes.length} 个问题` : "本地 Codex 会话"}
@@ -679,7 +719,7 @@ export default function App() {
                     <RefreshCw size={16} />
                     重新扫描
                   </button>
-                  <code>codex-trail doctor</code>
+                  <code>codex-nav doctor</code>
                 </div>
               )}
               {pending > 0 && (

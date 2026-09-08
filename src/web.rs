@@ -131,26 +131,21 @@ impl ApiReply {
 
 /// Starts an independent local reader, never a Codex subprocess or terminal wrapper.
 pub fn run(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
-    run_inner(home, cwd, config, options, false)
+    run_inner(home, cwd, config, options)
 }
 
 /// Question Trail shares the verified read-only transport, not a second session parser.
 pub fn run_trail(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
-    run_inner(home, cwd, config, options, true)
+    run(home, cwd, config, options)
 }
 
-fn run_inner(
-    home: PathBuf,
-    cwd: PathBuf,
-    config: Config,
-    options: WebOptions,
-    is_trail: bool,
-) -> Result<()> {
+fn run_inner(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
     let mut entropy = [0_u8; 32];
     getrandom::fill(&mut entropy).map_err(|_| anyhow::anyhow!("Cannot obtain secure Web token"))?;
     let token: String = entropy.iter().map(|byte| format!("{byte:02x}")).collect();
-    let mut backend = Backend::new(home, cwd, config, options.all);
-    backend.is_trail = is_trail;
+    // The web session list always spans all projects and dates. `all` remains a
+    // compatible option for callers; the terminal picker keeps its own scope.
+    let mut backend = Backend::new(home, cwd, config, true);
     if let Some(session) = options.session {
         let path = discovery::resolve_session(&backend.home, &session, &backend.config)?;
         backend.initial_session = Some(backend.register(path, true)?);
@@ -164,8 +159,7 @@ fn run_inner(
             .await
             .context("Cannot bind local Web port; use --port to select another port")?;
         let authority = listener.local_addr()?.to_string();
-        let entry = if is_trail { "/trail/" } else { "/" };
-        let url = format!("http://{authority}{entry}#token={token}");
+        let url = format!("http://{authority}/#token={token}");
         let (sender, receiver) = mpsc::sync_channel(4);
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stop = stopped.clone();
@@ -195,12 +189,9 @@ fn run_inner(
             events_capacity: Arc::new(Semaphore::new(8)),
         };
         let router = Router::new().fallback(handle).with_state(state);
-        let name = if is_trail {
-            "Codex Question Trail"
-        } else {
-            "Codex Navigator Web"
-        };
-        println!("{name} — 本机只读，无 AI/API 调用，Ctrl+C 停止\n{url}");
+        println!(
+            "Codex Navigator Web · Question Trail — 本机只读，无 AI/API 调用，Ctrl+C 停止\n{url}"
+        );
         std::io::stdout().flush()?;
         if !options.no_open {
             if let Err(error) = open_browser(&url) {
@@ -408,7 +399,7 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
         return ApiReply::error(StatusCode::BAD_REQUEST, "GET 请求不能携带正文").response();
     }
     let resource = match path {
-        "/trail/" | "/trail" | "/trail/index.html" => Some((
+        "/" | "/index.html" | "/trail/" | "/trail" | "/trail/index.html" => Some((
             "text/html; charset=utf-8",
             include_str!("../trail/dist/index.html"),
         )),
@@ -420,22 +411,9 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
             "text/css; charset=utf-8",
             include_str!("../trail/dist/assets/trail.css"),
         )),
-        "/" | "/index.html" => Some((
-            "text/html; charset=utf-8",
-            include_str!("../web/index.html"),
-        )),
-        "/app.css" => Some(("text/css; charset=utf-8", include_str!("../web/app.css"))),
-        "/app.js" => Some((
+        "/trail/theme-init.js" | "/theme-init.js" => Some((
             "text/javascript; charset=utf-8",
-            include_str!("../web/app.js"),
-        )),
-        "/state.mjs" => Some((
-            "text/javascript; charset=utf-8",
-            include_str!("../web/state.mjs"),
-        )),
-        "/flow.js" => Some((
-            "text/javascript; charset=utf-8",
-            include_str!("../web/flow.js"),
+            include_str!("../trail/dist/theme-init.js"),
         )),
         _ => None,
     };
@@ -446,9 +424,7 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
             body: body.as_bytes().to_vec(),
         }
         .response();
-        if path.starts_with("/trail") {
-            response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"));
-        }
+        response.headers_mut().insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; script-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"));
         return response;
     }
     if !path.starts_with("/api/") {
@@ -609,7 +585,6 @@ impl OpenSession {
 type ScanResult = (bool, Result<Vec<SessionSummary>>);
 
 struct Backend {
-    is_trail: bool,
     home: PathBuf,
     cwd: PathBuf,
     config: Config,
@@ -629,12 +604,18 @@ struct Backend {
     search_signature: HashMap<String, (u64, Option<std::time::SystemTime>)>,
     search_checked: std::time::Instant,
     search_deferred: bool,
+    search_refresh_requested: bool,
 }
 
 impl Backend {
     fn ensure_search(&mut self) {
         if self.search_worker.is_some()
+            || (!self.config.watch
+                && !self.search_refresh_requested
+                && !self.search_deferred
+                && !self.search_signature.is_empty())
             || (!self.search_signature.is_empty()
+                && !self.search_refresh_requested
                 && self.search_checked.elapsed() < Duration::from_secs(3))
         {
             return;
@@ -645,6 +626,7 @@ impl Backend {
             self.start_scan(true);
             return;
         }
+        self.search_refresh_requested = false;
         let keys: Vec<_> = self.listings[1]
             .as_ref()
             .into_iter()
@@ -742,7 +724,6 @@ impl Backend {
     }
     fn new(home: PathBuf, cwd: PathBuf, config: Config, default_all: bool) -> Self {
         Self {
-            is_trail: false,
             home,
             cwd,
             config,
@@ -762,6 +743,7 @@ impl Backend {
             search_signature: HashMap::new(),
             search_checked: std::time::Instant::now() - Duration::from_secs(10),
             search_deferred: false,
+            search_refresh_requested: false,
         }
     }
 
@@ -832,13 +814,11 @@ impl Backend {
             self.scan = None;
             match result {
                 Ok(mut sessions) => {
-                    if self.is_trail {
-                        sessions.sort_by(|a, b| {
-                            b.updated_at
-                                .cmp(&a.updated_at)
-                                .then_with(|| a.id.cmp(&b.id))
-                        });
-                    }
+                    sessions.sort_by(|a, b| {
+                        b.updated_at
+                            .cmp(&a.updated_at)
+                            .then_with(|| a.id.cmp(&b.id))
+                    });
                     let mut listing = Vec::new();
                     let mut truncated = sessions.len() > MAX_SESSIONS;
                     for summary in sessions.into_iter().take(MAX_SESSIONS) {
@@ -849,6 +829,7 @@ impl Backend {
                         }
                     }
                     self.listings[usize::from(all)] = Some(listing);
+                    self.search_refresh_requested = true;
                     self.scan_error[usize::from(all)] = truncated.then(|| "会话登记达到 20,000 项上限，部分会话未显示；请重启服务，或使用 --session 直接打开。".into());
                 }
                 Err(_) => {
@@ -947,7 +928,8 @@ impl Backend {
             .filter(|key| !key.contains('/'))
         {
             let watch = self.config.watch;
-            let Ok(open) = self.get_session(key, false) else {
+            let Ok(open) = self.get_session(key, query.get("refresh").is_some_and(|s| s == "1"))
+            else {
                 return ApiReply::error(
                     StatusCode::NOT_FOUND,
                     "会话不存在或文件不可读取，请刷新会话列表",
@@ -965,9 +947,7 @@ impl Backend {
             );
         }
         if path == "/api/sessions" {
-            if self.is_trail {
-                self.ensure_search();
-            }
+            self.ensure_search();
             let all = match query.get("all").map(String::as_str) {
                 None => self.default_all,
                 Some("0") => false,

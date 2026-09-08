@@ -6,9 +6,9 @@ use std::{fs, path::PathBuf};
 #[derive(Debug, Parser)]
 #[command(
     name = "codex-trail",
-    version = "1.0.0",
-    about = "Question Trail: explore your local Codex questions, not hidden reasoning",
-    after_help = "Read-only and local-only. No AI/API calls or conversation uploads.\nUse codex-nav for the terminal navigator. Press Ctrl+C to stop the web server."
+    version,
+    about = "Compatibility entry for codex-nav --web (Question Trail)",
+    after_help = "Read-only and local-only. No AI/API calls or conversation uploads.\nUse codex-nav --web for the web reader, or codex-nav for the terminal navigator. Press Ctrl+C to stop the web server."
 )]
 struct Cli {
     /// Print the private local URL without opening a browser.
@@ -20,6 +20,12 @@ struct Cli {
     /// Codex data directory (otherwise CODEX_HOME, then ~/.codex).
     #[arg(long, value_name = "PATH", global = true)]
     codex_home: Option<PathBuf>,
+    /// Open a session by exact ID, unique ID prefix, or rollout file path.
+    #[arg(long, value_name = "SESSION_ID_OR_PATH")]
+    session: Option<String>,
+    /// Disable automatic updates; use Refresh in the web UI.
+    #[arg(long)]
+    no_watch: bool,
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -51,8 +57,9 @@ fn run() -> Result<()> {
     };
     let cwd = std::env::current_dir().context("Cannot resolve current directory")?;
     let mut config = Config::load()?;
-    // Trail is a live question viewer, independent of the reader's watch preference.
-    config.watch = true;
+    if cli.no_watch {
+        config.watch = false;
+    }
     if matches!(cli.command, Some(Command::Doctor)) {
         return doctor(&home, &cwd, &config);
     }
@@ -64,13 +71,16 @@ fn run() -> Result<()> {
             port: cli.port,
             no_open: cli.no_open,
             all: true,
-            session: None,
+            session: cli.session,
         },
     )
 }
 
 fn doctor(home: &std::path::Path, cwd: &std::path::Path, config: &Config) -> Result<()> {
-    println!("Codex Question Trail 1.0.0");
+    println!(
+        "Codex Navigator {} · Question Trail",
+        env!("CARGO_PKG_VERSION")
+    );
     println!("Codex home: {}", sanitize(&home.display().to_string()));
     println!("Privacy: read-only · localhost only · no AI/API calls · no uploads");
     println!("Discovery: --codex-home > CODEX_HOME > ~/.codex; all dates and projects");
@@ -106,10 +116,17 @@ fn doctor(home: &std::path::Path, cwd: &std::path::Path, config: &Config) -> Res
         "Main sessions: {}",
         discovery::main_sessions(sessions).len()
     );
-    println!("Watcher: enabled, with incremental reads and polling fallback");
+    println!(
+        "Watcher: {}",
+        if config.watch {
+            "enabled, with incremental reads and polling fallback"
+        } else {
+            "disabled; refresh manually"
+        }
+    );
     if readable == 0 {
         println!("No readable sessions found. Send a question in Codex, then rescan.");
     }
-    println!("Start: codex-trail (or --no-open to print the local URL)");
+    println!("Start: codex-nav --web (codex-trail remains a compatible entry)");
     Ok(())
 }

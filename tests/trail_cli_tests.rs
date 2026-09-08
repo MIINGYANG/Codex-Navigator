@@ -10,7 +10,7 @@ fn command(root: &TempDir) -> Command {
 }
 
 #[test]
-fn trail_help_and_version_describe_independent_entry() {
+fn trail_help_and_version_describe_compatible_entry() {
     let root = TempDir::new().unwrap();
     let output = command(&root).arg("--help").output().unwrap();
     assert!(output.status.success());
@@ -20,6 +20,8 @@ fn trail_help_and_version_describe_independent_entry() {
         "--port",
         "47321",
         "--codex-home",
+        "--session",
+        "--no-watch",
         "doctor",
         "codex-nav",
         "No AI/API calls",
@@ -28,7 +30,10 @@ fn trail_help_and_version_describe_independent_entry() {
     }
     let version = command(&root).arg("--version").output().unwrap();
     assert!(version.status.success());
-    assert_eq!(version.stdout, b"codex-trail 1.0.0\n");
+    assert_eq!(
+        String::from_utf8(version.stdout).unwrap(),
+        format!("codex-trail {}\n", env!("CARGO_PKG_VERSION"))
+    );
 }
 
 #[test]

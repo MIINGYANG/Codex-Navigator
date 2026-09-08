@@ -28,7 +28,7 @@ export async function api<T>(path: string, signal?: AbortSignal): Promise<T> {
         "本地访问凭证已失效，请重新打开终端中带 token 的完整地址。",
       );
     throw new Error(
-      `本地服务暂不可用（${response.status}），请确认 codex-trail 正在运行。`,
+      `本地服务暂不可用（${response.status}），请确认 codex-nav --web 正在运行。`,
     );
   }
   return response.json() as Promise<T>;

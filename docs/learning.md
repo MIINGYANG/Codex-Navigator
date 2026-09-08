@@ -111,3 +111,9 @@
 **Key insight:** 图只消费可确定的顺序和明确父问题字段；fork记录序号、root_turn_id和子代理父线程不是可互换的关系。复用Rust解析和服务、内嵌ReactFlow资源可保留单binary安装；实时解析、全局索引和视口状态要分别控制，不因一个文件追加而重扫全库或重置历史阅读。
 **Details / snippet:** 175 Rust +53前端测试、fmt/clippy/lint/typecheck、release/隔离离线安装、三档真实Chrome与旧Web/终端回归通过。DOMRect不能用spread复制getter字段；小地图需同时配置内部尺寸和点击回调。移动/中屏聚焦使用扣除抽屉后的可见区域，live revision不触发重新居中；初次加载与大批live读取分开跟踪。1000问题只渲染可见6卡，约1.25秒首次可读为本机测试值而非跨平台承诺。参考材料保留本地，用户截图仅含合成数据，未改真实Codex会话、不push。
 **Tags:** #question-trail #react-flow #geometry #streaming #privacy #verification
+
+## 2026-09-09 — 统一入口与深色主题的完整验收
+**Question:** 如何用问题画布接替codex-nav --web并提供可靠深色主题、安装更新与发布？
+**Key insight:** 入口替换要保留CLI的指定会话和禁用监控语义，不能让网页自动选择覆盖显式session，也不能让后台索引绕过no-watch。主题不仅是面板换色，ReactFlow容器与Background SVG的库默认色也必须统一；启动外部阻塞脚本可在保持严格CSP的同时应用保存的主题。
+**Details / snippet:** 179 Rust +30前端测试、fmt/clippy/lint/types、release/package独立源码编译、隔离安装、三档Chrome浅深与终端六组全部通过。7项主题测试覆盖系统变化、显式覆盖、存储异常和bootstrap一致性；真实浏览器补指定会话静态刷新与SVG背景精确断言。旧阅读页/设计文件只停止跟踪并保留本地，发布仅main和新版本标签，不强推历史或覆盖用户全局安装。
+**Tags:** #web #theme #cli #release #privacy #verification

@@ -6,3 +6,12 @@ __pycache__/
 /Codex-Navigator-Product-Spec-and-Implementation-Plan.md
 /Codex-Question-Trail-Sidecar-Web-Implementation-Spec.md
 /Web_UI_0.jpeg
+# Retired reader and private design materials remain local, not shipped.
+/web/
+/scripts/web_qa.mjs
+/scripts/flow_qa.mjs
+/scripts/design_preview_qa.mjs
+/docs/design-preview/
+/docs/web-design-options.md
+/docs/web-implementation.md
+/docs/architecture.md
