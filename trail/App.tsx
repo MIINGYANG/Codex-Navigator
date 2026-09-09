@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import Canvas, { type CanvasHandle } from "./Canvas";
 import ThemeSwitch from "./ThemeSwitch";
+import ProjectPath from "./ProjectPath";
 import type { QuestionGraph, QuestionNode } from "./graph";
 import { api, subscribe } from "./api";
 import {
@@ -42,6 +43,7 @@ import {
 
 type GraphResponse = QuestionGraph & {
   key: string;
+  meta: { cwd: string | null };
   generation: number;
   revision: number;
   loading: boolean;
@@ -482,10 +484,7 @@ export default function App() {
                   <i>·</i>
                   {relativeTime(session.updated_at)}
                 </span>
-                <small>
-                  {session.cwd?.split(/[\\/]/).filter(Boolean).at(-1) ||
-                    "本地会话"}
-                </small>
+                <small>{session.cwd || "项目路径未记录"}</small>
               </span>
               <ChevronRight size={14} />
             </button>
@@ -513,7 +512,7 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Codex Navigator 2.0</span>
+          <span className="version">Codex Navigator 2.1</span>
         </div>
       </aside>
 
@@ -581,6 +580,15 @@ export default function App() {
                   {graph ? `${graph.nodes.length} 个问题` : "本地 Codex 会话"}
                   <span>·</span>连线仅表示记录中的顺序与分支
                 </p>
+                {key && (
+                  <ProjectPath
+                    key={key}
+                    cwd={
+                      graph?.key === key ? graph.meta.cwd : currentSession?.cwd
+                    }
+                    notify={setToast}
+                  />
+                )}
               </div>
               <button
                 className="icon-button"

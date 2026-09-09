@@ -415,6 +415,9 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
             "text/javascript; charset=utf-8",
             include_str!("../trail/dist/theme-init.js"),
         )),
+        "/trail/favicon.svg" | "/favicon.svg" => {
+            Some(("image/svg+xml", include_str!("../trail/dist/favicon.svg")))
+        }
         _ => None,
     };
     if let Some((content_type, body)) = resource {
@@ -938,7 +941,7 @@ impl Backend {
             let (nodes, edges, notices) = trail::graph(&open.session);
             let stats = &open.session.parse_stats;
             return ApiReply::json(
-                json!({"key":key,"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices}),
+                json!({"key":key,"meta":{"cwd":open.session.meta.cwd.as_ref().map(|p|p.to_string_lossy())},"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices}),
             );
         }
         if path == "/api/info" {

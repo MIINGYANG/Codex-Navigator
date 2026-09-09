@@ -1,5 +1,24 @@
 # Codex Navigator v1.0 实施计划
 
+## v2.1.0 — 标签页图标与会话项目路径
+
+用户确认需要浏览器标签页 favicon；会话显示记录中的完整项目路径，方便进入对应目录恢复对话。复用蓝色路线品牌标识和现有 cwd 数据，保持现有布局与只读边界。路径缺失时明确提示未记录，不使用 Navigator 的启动目录猜测。
+
+- [x] 增加内嵌 SVG favicon，覆盖主入口与 /trail/ 兼容地址。
+- [x] 会话列表与当前会话显示完整项目路径，支持复制并处理剪贴板不可用；补充行为与 API 验收。
+- [x] 同步 2.1.0 版本与变更说明，执行格式/lint/全量测试/release build 和桌面、窄屏浏览器验收。
+- [x] 记录结果与知识，保存独立本地 commit 和新版本标签，不 push。
+
+设计核对：沿用白/深蓝面板、现有蓝色强调与正文/等宽字体；仅 favicon 使用蓝底白色路线，路径行使用现有次要文字色。完整路径可换行，复制按钮与路径相邻，窄屏无需悬停即可读取。
+
+### v2.1.0 验收 — 2026-09-09
+
+180 项 Rust 测试、30 项前端测试通过；cargo fmt、clippy --all-targets -D warnings、TypeScript strict、ESLint、Prettier、production bundle、双 binary release 与 git diff --check 通过。HTTP 测试覆盖图标 MIME/入口别名/无认证静态资源安全、中文空格路径原样往返、缺失值和列表外显式会话。首次沙箱内测试因禁止本机端口失败，经批准在沙箱外完整复验通过。
+
+真实 Chrome 1848 / 1000 / 390px 验收通过：favicon SVG 请求与解码、完整路径换行不溢出、精确复制、剪贴板拒绝时选中供手动复制、切换缺失路径不残留旧值、列表外 --session 路径正确；原有浅深/系统主题、搜索/详情/画布/小地图、千问题虚拟化、SSE 与 no-watch 手动刷新全部通过。主代理已查看桌面浅深和手机深色截图，README 两张合成截图同步更新，验收目录 /tmp/codex-trail-qa-oJrq2A。脚本创建的浏览器窗口与测试服务均已关闭，真实 Codex 数据未读取或写入。
+
+只读 review 未发现阻断问题；元数据尚未载入时可能短暂提示路径未记录。终端交互未改，本次未额外运行 terminal_qa.py；全量 Rust 测试包含现有终端状态与导航回归。交付 target/release/codex-nav 与 codex-trail 2.1.0，未覆盖全局安装或重启用户现有服务；按本次独立本地提交和 v2.1.0 新标签保存，不 push。
+
 ## v2.0.0 — 统一 Web 入口与深色主题
 
 用户要求替换旧网页阅读模式：保留 TUI，`codex-nav --web` 统一打开 Question Trail，`codex-trail` 作为兼容入口。不修改 Codex；本次授权验证后推送 GitHub main 与新版本标签，不强推或重写历史。设计文件与 UI 参考保留本地，不纳入发布。

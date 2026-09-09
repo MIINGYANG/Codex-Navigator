@@ -258,6 +258,8 @@ fn web_static_assets_and_security_headers_expose_no_session_data() {
         "/trail/assets/trail.css",
         "/trail/theme-init.js",
         "/theme-init.js",
+        "/favicon.svg",
+        "/trail/favicon.svg",
     ] {
         let response = server.request("GET", path, &[]);
         assert_eq!(response.status, 200, "{path}");
@@ -269,6 +271,18 @@ fn web_static_assets_and_security_headers_expose_no_session_data() {
         assert!(response.headers["cache-control"].contains("no-store"));
     }
     let home = server.request("GET", "/", &[]);
+    let favicon = server.request("GET", "/favicon.svg", &[]);
+    assert_eq!(favicon.headers["content-type"], "image/svg+xml");
+    assert!(favicon.text().contains("<svg"));
+    assert_eq!(
+        favicon.body,
+        server.request("GET", "/trail/favicon.svg", &[]).body
+    );
+    for entry in ["/", "/index.html", "/trail", "/trail/", "/trail/index.html"] {
+        let html = server.request("GET", entry, &[]).text();
+        assert!(html.contains("rel=\"icon\""));
+        assert!(html.contains("href=\"/trail/favicon.svg\""));
+    }
     let csp = &home.headers["content-security-policy"];
     for rule in [
         "default-src 'none'",
@@ -726,6 +740,12 @@ fn web_discovery_rejects_symlink_escape_but_cli_may_explicitly_open_external_fil
     let info = explicit.get("/api/info").json();
     let key = info["initial_session"].as_str().unwrap();
     assert_eq!(explicit.loaded(key, 1)["meta"]["id"], "outside");
+    let graph = explicit.get(&format!("/api/trail/session/{key}")).json();
+    assert_eq!(graph["meta"]["cwd"], "/synthetic/project");
+    assert!(explicit.sessions()["sessions"]
+        .as_array()
+        .unwrap()
+        .is_empty());
     assert_eq!(
         explicit.get(&format!("/api/session/{key}/turn/0")).json()["turn"]["prompt"]["text"],
         "outside-private-marker"
@@ -877,6 +897,39 @@ fn trail_graph_search_are_deterministic_prompt_only_and_do_not_evict_live_sessio
     );
     assert_eq!(server.get("/api/trail/session/notregistered").status, 404);
     assert_eq!(fs::read(&branch_path).unwrap(), original);
+}
+
+#[test]
+fn trail_project_path_preserves_recorded_text_and_missing_values() {
+    let root = TempDir::new().unwrap();
+    let cwd = "/home/example/项目/Personal Project/codex-navigator";
+    let mut recorded = meta("recorded");
+    recorded["payload"]["cwd"] = json!(cwd);
+    fixture(
+        root.path(),
+        "recorded",
+        &[recorded, user("recorded project")],
+    );
+    let mut missing = meta("missing");
+    missing["payload"].as_object_mut().unwrap().remove("cwd");
+    fixture(root.path(), "missing", &[missing, user("missing project")]);
+    let server = Server::start(root, &[]);
+    for (id, expected) in [("recorded", json!(cwd)), ("missing", Value::Null)] {
+        let key = server.key(id);
+        let listing = server.get("/api/sessions?all=1").json();
+        let summary = listing["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|session| session["key"] == key)
+            .unwrap();
+        assert_eq!(summary["cwd"], expected);
+        let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+            v["loading"] == false
+        });
+        assert_eq!(graph["meta"]["cwd"], expected);
+        assert_eq!(server.loaded(&key, 1)["meta"]["cwd"], expected);
+    }
 }
 
 #[test]

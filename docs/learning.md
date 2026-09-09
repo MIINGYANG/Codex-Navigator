@@ -117,3 +117,9 @@
 **Key insight:** 入口替换要保留CLI的指定会话和禁用监控语义，不能让网页自动选择覆盖显式session，也不能让后台索引绕过no-watch。主题不仅是面板换色，ReactFlow容器与Background SVG的库默认色也必须统一；启动外部阻塞脚本可在保持严格CSP的同时应用保存的主题。
 **Details / snippet:** 179 Rust +30前端测试、fmt/clippy/lint/types、release/package独立源码编译、隔离安装、三档Chrome浅深与终端六组全部通过。7项主题测试覆盖系统变化、显式覆盖、存储异常和bootstrap一致性；真实浏览器补指定会话静态刷新与SVG背景精确断言。旧阅读页/设计文件只停止跟踪并保留本地，发布仅main和新版本标签，不强推历史或覆盖用户全局安装。
 **Tags:** #web #theme #cli #release #privacy #verification
+
+## 2026-09-09 — 标签页辨识与完整项目路径
+**Question:** 如何让 Web 标签页容易定位，并让每个 session 显示可用于返回项目的完整路径？
+**Key insight:** 项目路径已有后端数据时，应补全展示而非重新推断。当前会话不能只依赖列表摘要，因为 --session 可以显式打开列表外文件；图接口携带自身 cwd 并按 session key 隔离，可避免切换残留和错误回退。完整路径要在窄屏可换行，并在剪贴板不可用时仍可手动复制。
+**Details / snippet:** v2.1.0 内嵌 SVG favicon，主入口与 /trail/ 共用；180 Rust +30 前端测试、fmt/clippy/lint/types/release、1848/1000/390px Chrome 与合成源只读验证通过。图标检查实际 HTTP MIME 与浏览器解码，路径覆盖中文/空格、缺失值和列表外会话。仅本地提交/tag，不更新全局安装或自动 push。
+**Tags:** #web #session #cwd #favicon #clipboard #verification

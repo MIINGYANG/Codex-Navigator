@@ -59,7 +59,10 @@ function turn(index, title = questions[index - 1], parent) {
 const rollouts = new Map([
   [
     "main",
-    meta("trail-qa-main", "question-map") +
+    meta(
+      "trail-qa-main",
+      "项目目录/Personal Project/long-project-path/question-map",
+    ) +
       [null, 1, 1, 2, 2, 3]
         .map((parent, i) => turn(i + 1, undefined, parent))
         .join(""),
@@ -69,7 +72,7 @@ const rollouts = new Map([
     meta("trail-qa-other", "sidecar-notes") +
       turn(1, "Sidecar 独立入口怎样部署到另一台设备？"),
   ],
-  ["empty", meta("trail-qa-empty", "empty-session")],
+  ["empty", record("session_meta", { id: "empty-session", source: "cli" })],
   [
     "linear",
     meta("trail-qa-linear", "linear-1000") +
@@ -361,6 +364,67 @@ try {
     );
     console.log(`窗口请求 ${width}px，实际验收 ${actualWidth}px`);
     await setTheme(target, width === 390 ? "dark" : "light");
+    const projectPath =
+      "/synthetic/项目目录/Personal Project/long-project-path/question-map";
+    await wait(
+      target,
+      `document.querySelector('.project-path code')?.textContent===${JSON.stringify(projectPath)}`,
+      "完整项目路径",
+    );
+    assert.equal(
+      await evaluate(
+        target,
+        "document.querySelector('.session-item.active small').textContent",
+      ),
+      projectPath,
+      "列表完整路径",
+    );
+    assert.ok(
+      await evaluate(
+        target,
+        "(()=>{const e=document.querySelector('.project-path code'),r=e.getBoundingClientRect();return e.scrollWidth<=e.clientWidth+1&&r.right<=innerWidth&&r.left>=0})()",
+      ),
+      "长路径换行且不溢出",
+    );
+    assert.deepEqual(
+      await evaluate(
+        target,
+        "(async()=>{const link=document.querySelector('link[rel=icon]');const r=await fetch(link.href);const text=await r.text();const image=new Image();image.src=link.href;await image.decode();return {type:link.type,status:r.status,mime:r.headers.get('content-type'),svg:text.includes('<svg'),decoded:image.naturalWidth>0}})()",
+      ),
+      {
+        type: "image/svg+xml",
+        status: 200,
+        mime: "image/svg+xml",
+        svg: true,
+        decoded: true,
+      },
+      "标签页 SVG 可请求并解码",
+    );
+    await evaluate(
+      target,
+      "(()=>{Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text)=>{window.__copiedProject=text}}});return true})()",
+    );
+    await click(target, '[aria-label="复制项目路径"]');
+    await wait(
+      target,
+      `window.__copiedProject===${JSON.stringify(projectPath)}`,
+      "复制完整路径包含中文和空格",
+    );
+    await evaluate(
+      target,
+      "(()=>{navigator.clipboard.writeText=async()=>{throw new Error('denied')};return true})()",
+    );
+    await click(target, '[aria-label="复制项目路径"]');
+    await wait(
+      target,
+      `getSelection().toString()===${JSON.stringify(projectPath)}&&document.querySelector('.toast')?.textContent.includes('手动复制')`,
+      "剪贴板拒绝时选中路径供手动复制",
+    );
+    await evaluate(
+      target,
+      "(()=>{getSelection().removeAllRanges();return true})()",
+    );
+
     assert.ok(
       await evaluate(
         target,
@@ -780,6 +844,12 @@ try {
       "document.querySelector('.canvas-empty')?.textContent.includes('还没有用户问题')",
       "无问题会话空态",
     );
+    await wait(
+      target,
+      "document.querySelector('.project-path code')?.textContent==='项目路径未记录'&&!document.querySelector('[aria-label=复制项目路径]')",
+      "缺失路径不残留上一会话值且不提供复制",
+    );
+
     await choose(target, "question-map");
     await wait(
       target,
@@ -911,7 +981,7 @@ try {
   const staticHome = path.join(fixture, "static-codex");
   const staticDir = path.join(staticHome, "sessions");
   await fs.mkdir(staticDir, { recursive: true });
-  const staticPath = path.join(staticDir, "rollout-target.jsonl");
+  const staticPath = path.join(fixture, "rollout-target.jsonl");
   const latestPath = path.join(staticDir, "rollout-latest.jsonl");
   const staticText =
     meta("trail-static-target", "specified-session") +
@@ -935,7 +1005,7 @@ try {
       "--codex-home",
       staticHome,
       "--session",
-      "trail-static-target",
+      staticPath,
     ],
     {
       env: { ...process.env, XDG_CONFIG_HOME: path.join(fixture, "config") },
@@ -976,6 +1046,12 @@ try {
     "document.querySelectorAll('.qt-card').length===1&&document.querySelector('.canvas-heading h1')?.textContent.includes('静态指定会话')&&document.querySelector('.local-status')?.textContent.includes('手动刷新')",
     "--session 打开指定而非最新会话；--no-watch 显示手动刷新",
   );
+  await wait(
+    staticTab,
+    "document.querySelector('.project-path code')?.textContent==='/synthetic/specified-session'&&document.querySelectorAll('.session-item').length===1",
+    "列表外显式会话也显示自身项目路径",
+  );
+
   const staticAppend = turn(2, "手动刷新后才能显示的第二个问题");
   await fs.appendFile(staticPath, staticAppend);
   await evaluate(staticTab, "new Promise(r=>setTimeout(()=>r(true),2500))");
