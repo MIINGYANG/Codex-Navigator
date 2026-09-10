@@ -129,3 +129,9 @@
 **Key insight:** 名称既存在session_index也存在Codex状态数据库，不能只改一个索引或网页别名；应调用官方thread/name/set，并用thread/read核对身份、路径和读回值。原来只读的产品增加管理能力时，需要明确写入入口、同源认证和权限边界；删除仅使用系统回收站。取消后台索引不能只清掉被删除会话的签名，还要让其他未完成索引重新调度。
 **Details / snippet:** v3.0.0：192 Rust +31前端测试及桌面/窄屏Chrome通过；Codex 0.153.2隔离实测名称持久化、rollout正文不变，gio合成回收站hash通过，精确移回后重启恢复通过（隔离环境系统restore交互未通过）。[官方App Server文档](https://learn.chatgpt.com/docs/app-server)说明name/set可作用于持久会话，read无需resume。删除不清理Codex数据库、不能检测外部进程活动；超时可能已完成写入，先刷新核对再重试。
 **Tags:** #web #session #codex #trash #security #index #verification
+
+## 2026-09-11 — 区分本地版本交付与 GitHub 同步
+**Question:** README 是否更新，最新代码是否已经推送 GitHub？
+**Key insight:** 本地commit/tag不等于远程已更新，应依据明确的推送请求执行，并读取远程引用验证。已验证源码未变时不重复构建；发布结果的文档补充可独立提交，保留版本标签指向原功能提交。
+**Details / snippet:** 非强制原子推送main、v2.1.0、v3.0.0；远程main/v3.0.0核对为4d83b8f，v2.1.0为73c00c2。README包含3.0.0功能与安装说明，5项本地链接通过。
+**Tags:** #git #release #readme #verification
