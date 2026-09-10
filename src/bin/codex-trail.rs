@@ -8,7 +8,7 @@ use std::{fs, path::PathBuf};
     name = "codex-trail",
     version,
     about = "Compatibility entry for codex-nav --web (Question Trail)",
-    after_help = "Read-only and local-only. No AI/API calls or conversation uploads.\nUse codex-nav --web for the web reader, or codex-nav for the terminal navigator. Press Ctrl+C to stop the web server."
+    after_help = "Local-only browsing and explicit session management. No model calls or conversation uploads.\nUse codex-nav --web for the web reader, or codex-nav for the terminal navigator. Press Ctrl+C to stop the web server."
 )]
 struct Cli {
     /// Print the private local URL without opening a browser.
@@ -82,7 +82,7 @@ fn doctor(home: &std::path::Path, cwd: &std::path::Path, config: &Config) -> Res
         env!("CARGO_PKG_VERSION")
     );
     println!("Codex home: {}", sanitize(&home.display().to_string()));
-    println!("Privacy: read-only · localhost only · no AI/API calls · no uploads");
+    println!("Doctor: read-only · Web: local browsing, explicit rename/trash · no model calls");
     println!("Discovery: --codex-home > CODEX_HOME > ~/.codex; all dates and projects");
     match fs::metadata(home) {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {

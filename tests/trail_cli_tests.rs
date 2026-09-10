@@ -24,7 +24,7 @@ fn trail_help_and_version_describe_compatible_entry() {
         "--no-watch",
         "doctor",
         "codex-nav",
-        "No AI/API calls",
+        "No model calls",
     ] {
         assert!(help.contains(text), "missing {text}");
     }

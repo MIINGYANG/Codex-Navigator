@@ -1,6 +1,10 @@
 export default [
   {
-    files: ["trail/public/**/*.js", "scripts/trail_qa.mjs"],
+    files: [
+      "trail/public/**/*.js",
+      "scripts/trail_qa.mjs",
+      "scripts/management_qa.mjs",
+    ],
     languageOptions: {
       ecmaVersion: "latest",
       sourceType: "module",

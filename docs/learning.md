@@ -123,3 +123,9 @@
 **Key insight:** 项目路径已有后端数据时，应补全展示而非重新推断。当前会话不能只依赖列表摘要，因为 --session 可以显式打开列表外文件；图接口携带自身 cwd 并按 session key 隔离，可避免切换残留和错误回退。完整路径要在窄屏可换行，并在剪贴板不可用时仍可手动复制。
 **Details / snippet:** v2.1.0 内嵌 SVG favicon，主入口与 /trail/ 共用；180 Rust +30 前端测试、fmt/clippy/lint/types/release、1848/1000/390px Chrome 与合成源只读验证通过。图标检查实际 HTTP MIME 与浏览器解码，路径覆盖中文/空格、缺失值和列表外会话。仅本地提交/tag，不更新全局安装或自动 push。
 **Tags:** #web #session #cwd #favicon #clipboard #verification
+
+## 2026-09-11 — 用正式接口管理名称，并将删除限制为可恢复操作
+**Question:** 如何从 Web 重命名并同步 Codex，同时安全整理不需要的会话？
+**Key insight:** 名称既存在session_index也存在Codex状态数据库，不能只改一个索引或网页别名；应调用官方thread/name/set，并用thread/read核对身份、路径和读回值。原来只读的产品增加管理能力时，需要明确写入入口、同源认证和权限边界；删除仅使用系统回收站。取消后台索引不能只清掉被删除会话的签名，还要让其他未完成索引重新调度。
+**Details / snippet:** v3.0.0：192 Rust +31前端测试及桌面/窄屏Chrome通过；Codex 0.153.2隔离实测名称持久化、rollout正文不变，gio合成回收站hash通过，精确移回后重启恢复通过（隔离环境系统restore交互未通过）。[官方App Server文档](https://learn.chatgpt.com/docs/app-server)说明name/set可作用于持久会话，read无需resume。删除不清理Codex数据库、不能检测外部进程活动；超时可能已完成写入，先刷新核对再重试。
+**Tags:** #web #session #codex #trash #security #index #verification

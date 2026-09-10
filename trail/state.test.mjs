@@ -7,6 +7,7 @@ import {
   groupResults,
   reconcileSelection,
   initialLoadTransition,
+  reconcileSessions,
 } from "./state.ts";
 
 test("初次多批读取不报新增，后续大批实时追加不会吞掉新增提示", () => {
@@ -32,20 +33,43 @@ test("初次多批读取不报新增，后续大批实时追加不会吞掉新�
   });
 });
 
-test("会话使用第一个非空原文，不推测改写语义", () => {
+test("会话优先显示 Codex 名称，缺失时回退原始问题和 ID", () => {
   assert.equal(
     titleOf({
       first_prompt: " \n 原文   中的词？\n下一行",
-      title: "不要采用这个标题",
+      title: "已保存标题",
     }),
-    "原文 中的词？",
+    "已保存标题",
   );
   assert.equal(
     titleOf({ first_prompt: " ", title: "已保存标题" }),
     "已保存标题",
   );
   assert.equal(titleOf({ id: "session-id" }), "session-id");
+  assert.equal(
+    titleOf({ title: "  ", first_prompt: " \n 原文   中的词？\n下一行" }),
+    "原文 中的词？",
+  );
   assert.equal(titleOf(), "未命名会话");
+});
+test("异步旧扫描不能覆盖已改名称或恢复已删除会话", () => {
+  const snapshot = [
+    { key: "a", title: "旧名称" },
+    { key: "b", title: "待删除" },
+    { key: "c", title: "另一会话" },
+  ];
+  assert.deepEqual(
+    reconcileSessions(snapshot, new Map([["a", "新名称"]]), new Set(["b"])),
+    [
+      { key: "a", title: "新名称" },
+      { key: "c", title: "另一会话" },
+    ],
+  );
+  assert.equal(snapshot[0].title, "旧名称");
+  assert.deepEqual(
+    reconcileSessions(snapshot, new Map(), new Set(["a", "b", "c"])),
+    [],
+  );
 });
 test("日期缺失和无效时不伪造时间", () => {
   assert.equal(relativeTime(null), "时间未记录");

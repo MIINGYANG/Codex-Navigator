@@ -79,11 +79,15 @@ impl Server {
         if !alias {
             command.arg("--web");
         }
+        if root.path().join("bin").is_dir() {
+            command.env("PATH", root.path().join("bin"));
+        }
         let mut child = command
             .args(["--port", "0", "--no-open"])
             .args(arguments)
             .env("CODEX_HOME", root.path().join("codex"))
             .env("XDG_CONFIG_HOME", root.path().join("config"))
+            .env("XDG_DATA_HOME", root.path().join("data"))
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
@@ -126,6 +130,16 @@ impl Server {
     }
 
     fn request(&self, method: &str, path: &str, headers: &[(&str, &str)]) -> Response {
+        self.request_body(method, path, headers, None)
+    }
+
+    fn request_body(
+        &self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+        body: Option<&str>,
+    ) -> Response {
         let mut stream = TcpStream::connect(&self.address).unwrap();
         stream.set_read_timeout(Some(DEADLINE)).unwrap();
         stream.set_write_timeout(Some(DEADLINE)).unwrap();
@@ -140,7 +154,13 @@ impl Server {
                 request.push_str(&format!("{name}: {value}\r\n"));
             }
         }
+        if let Some(body) = body {
+            request.push_str(&format!("Content-Length: {}\r\n", body.len()));
+        }
         request.push_str("\r\n");
+        if let Some(body) = body {
+            request.push_str(body);
+        }
         stream.write_all(request.as_bytes()).unwrap();
         let mut bytes = Vec::new();
         stream.read_to_end(&mut bytes).unwrap();
@@ -201,6 +221,26 @@ impl Server {
 
     fn get(&self, path: &str) -> Response {
         self.request("GET", path, &[("X-Codex-Nav-Token", &self.token)])
+    }
+
+    fn post(&self, path: &str, body: &Value) -> Response {
+        self.request_body(
+            "POST",
+            path,
+            &[
+                ("X-Codex-Nav-Token", &self.token),
+                ("Origin", &format!("http://{}", self.address)),
+                ("Content-Type", "application/json"),
+            ],
+            Some(&body.to_string()),
+        )
+    }
+
+    fn restart(mut self, arguments: &[&str]) -> Self {
+        self.child.kill().unwrap();
+        self.child.wait().unwrap();
+        let root = std::mem::replace(&mut self.root, TempDir::new().unwrap());
+        Self::start(root, arguments)
     }
 
     fn wait(&self, path: &str, ready: impl Fn(&Value) -> bool) -> Value {
@@ -1122,4 +1162,419 @@ fn web_ctrl_c_gracefully_stops_server_and_session_worker() {
     }
     assert!(TcpStream::connect(&server.address).is_err());
     assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[cfg(target_os = "linux")]
+fn management_commands(root: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let codex = r#"#!/usr/bin/python3
+import json, os, pathlib, sys
+home = pathlib.Path(os.environ['CODEX_HOME'])
+assert sys.argv[1:] == ['app-server', '--stdio', '-c', 'analytics.enabled=false'], sys.argv
+log = home.parent / 'codex-calls.jsonl'
+for line in sys.stdin:
+    request = json.loads(line)
+    with log.open('a') as f:
+        f.write(json.dumps(request) + '\n')
+    if 'id' not in request:
+        continue
+    method = request['method']
+    params = request.get('params', {})
+    if method == 'initialize':
+        result = {'userAgent': 'isolated-test-codex'}
+    elif method == 'thread/read':
+        tid = params['threadId']
+        paths = list((home / 'sessions').rglob('rollout-' + tid + '.jsonl'))
+        assert len(paths) == 1, paths
+        index = home / 'session_index.jsonl'
+        name = None
+        if index.exists():
+            for row in index.read_text().splitlines():
+                entry = json.loads(row)
+                if entry['id'] == tid:
+                    name = entry['thread_name']
+        path = str(paths[0])
+        if (home.parent / 'wrong-codex-path').exists():
+            path = str(home.parent / 'unrelated.jsonl')
+        result = {'thread': {'id': tid, 'path': path, 'name': name, 'status': {'type': 'notLoaded'}}}
+    elif method == 'thread/name/set':
+        with (home / 'session_index.jsonl').open('a') as f:
+            f.write(json.dumps({'id': params['threadId'], 'thread_name': params['name'], 'updated_at': '2090-01-01T00:00:00Z'}) + '\n')
+        result = {}
+    else:
+        raise AssertionError(method)
+    print(json.dumps({'id': request['id'], 'result': result}), flush=True)
+"#;
+    let gio = r#"#!/usr/bin/python3
+import json, os, pathlib, sys
+assert len(sys.argv) == 4 and sys.argv[1:3] == ['trash', '--'], sys.argv
+source = pathlib.Path(sys.argv[3])
+assert source.is_absolute() and source.is_file()
+home = pathlib.Path(os.environ['CODEX_HOME'])
+assert (home / 'sessions').resolve() in source.resolve().parents
+with (home.parent / 'gio-calls.jsonl').open('a') as f:
+    f.write(json.dumps(sys.argv[1:]) + '\n')
+if (home.parent / 'fail-trash').exists():
+    print('simulated trash unavailable', file=sys.stderr)
+    sys.exit(1)
+trash = pathlib.Path(os.environ['XDG_DATA_HOME']) / 'Trash' / 'files'
+trash.mkdir(parents=True, exist_ok=True)
+source.rename(trash / source.name)
+"#;
+    for (name, content) in [("codex", codex), ("gio", gio)] {
+        let path = bin.join(name);
+        fs::write(&path, content).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_management_requires_authenticated_same_origin_json_and_valid_parameters() {
+    let root = TempDir::new().unwrap();
+    let id = "01994115-9c41-70b5-bc40-851e5edca001";
+    let path = fixture(root.path(), id, &[meta(id), user("protected question")]);
+    let original = fs::read(&path).unwrap();
+    management_commands(root.path());
+    let server = Server::start(root, &[]);
+    let key = server.key(id);
+    let rename = format!("/api/session/{key}/rename");
+    let trash = format!("/api/session/{key}/trash");
+    let origin = format!("http://{}", server.address);
+    let valid_headers = [
+        ("X-Codex-Nav-Token", server.token.as_str()),
+        ("Origin", origin.as_str()),
+        ("Content-Type", "application/json"),
+    ];
+    for headers in [
+        vec![
+            ("Origin", origin.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", "incorrect"),
+            ("Origin", origin.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Origin", "https://evil.invalid"),
+            ("Content-Type", "application/json"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Origin", "null"),
+            ("Content-Type", "application/json"),
+        ],
+        vec![
+            ("X-Codex-Nav-Token", server.token.as_str()),
+            ("Origin", origin.as_str()),
+            ("Origin", origin.as_str()),
+            ("Content-Type", "application/json"),
+        ],
+    ] {
+        for (route, body) in [
+            (&rename, r#"{"name":"Changed"}"#),
+            (&trash, r#"{"confirm":true}"#),
+        ] {
+            let response = server.request_body("POST", route, &headers, Some(body));
+            assert_eq!(
+                response.status,
+                403,
+                "headers={headers:?}: {}",
+                response.text()
+            );
+        }
+    }
+    for route in [&rename, &trash] {
+        for method in ["GET", "PUT", "DELETE", "OPTIONS"] {
+            assert!(
+                server.request(method, route, &valid_headers).status >= 400,
+                "{method} {route}"
+            );
+        }
+        for content_type in ["text/plain", "application/x-www-form-urlencoded"] {
+            let headers = [
+                valid_headers[0],
+                valid_headers[1],
+                ("Content-Type", content_type),
+            ];
+            assert!(
+                server
+                    .request_body("POST", route, &headers, Some("{}"))
+                    .status
+                    >= 400
+            );
+        }
+        assert!(
+            server
+                .request_body("POST", route, &valid_headers[..2], Some("{}"))
+                .status
+                >= 400
+        );
+        for body in ["{", "null", "[]", "{}"] {
+            assert!(
+                server
+                    .request_body("POST", route, &valid_headers, Some(body))
+                    .status
+                    >= 400,
+                "{route}: {body}"
+            );
+        }
+        let body = if route == &rename {
+            json!({"name":"Changed"})
+        } else {
+            json!({"confirm":true})
+        };
+        assert!(
+            server
+                .post(&format!("{route}?path=/tmp/other"), &body)
+                .status
+                >= 400
+        );
+    }
+    for name in [
+        "".to_string(),
+        "   ".to_string(),
+        "x".repeat(101),
+        "line\nbreak".to_string(),
+        "tab\tname".to_string(),
+        "null\0name".to_string(),
+    ] {
+        assert!(
+            server.post(&rename, &json!({"name":name})).status >= 400,
+            "name={name:?}"
+        );
+    }
+    for body in [
+        json!({"name":7}),
+        json!({"name":"valid", "path":"/tmp/other"}),
+    ] {
+        assert!(server.post(&rename, &body).status >= 400);
+    }
+    for body in [
+        json!({"confirm":false}),
+        json!({"confirm":"true"}),
+        json!({"confirm":true, "path":"/tmp/other"}),
+    ] {
+        assert!(server.post(&trash, &body).status >= 400);
+    }
+    assert!(
+        server
+            .post(&rename, &json!({"name":"x".repeat(4097)}))
+            .status
+            >= 400
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert!(!server.root.path().join("codex-calls.jsonl").exists());
+    assert!(!server.root.path().join("gio-calls.jsonl").exists());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_rename_syncs_codex_list_graph_search_and_survives_restart() {
+    let root = TempDir::new().unwrap();
+    let id = "01994115-9c41-70b5-bc40-851e5edca002";
+    let path = fixture(
+        root.path(),
+        id,
+        &[meta(id), user("managementkeyword question")],
+    );
+    let original = fs::read(&path).unwrap();
+    management_commands(root.path());
+    let server = Server::start(root, &["--no-watch"]);
+    let key = server.key(id);
+    server.loaded(&key, 1);
+    let search = "/api/trail/search?q=managementkeyword";
+    server.wait(search, |v| {
+        v["loading"] == false && v["results"].as_array().is_some_and(|rows| rows.len() == 1)
+    });
+    let route = format!("/api/session/{key}/rename");
+    let name = "项目整理 · 已同步 Codex";
+    assert_eq!(
+        server.post(&route, &json!({"name":name})).json()["name"],
+        name
+    );
+    for _ in 0..2 {
+        let listing = server.sessions();
+        assert_eq!(listing["sessions"][0]["title"], name);
+        let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+            v["loading"] == false
+        });
+        assert_eq!(graph["meta"]["title"], name);
+        let results = server.wait(search, |v| v["loading"] == false);
+        assert_eq!(results["results"][0]["sessionTitle"], name);
+        server.get("/api/sessions?all=1&refresh=1").json();
+    }
+    let calls: Vec<Value> = fs::read_to_string(server.root.path().join("codex-calls.jsonl"))
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let methods: Vec<&str> = calls
+        .iter()
+        .filter_map(|call| call["method"].as_str())
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "initialize",
+            "initialized",
+            "thread/read",
+            "thread/name/set",
+            "thread/read"
+        ]
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let server = server.restart(&["--no-watch"]);
+    assert_eq!(server.sessions()["sessions"][0]["title"], name);
+    let key = server.key(id);
+    assert_eq!(
+        server.wait(&format!("/api/trail/session/{key}"), |v| v["loading"]
+            == false)["meta"]["title"],
+        name
+    );
+    assert_eq!(
+        server.wait(search, |v| v["loading"] == false)["results"][0]["sessionTitle"],
+        name
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_trash_removes_current_and_last_sessions_without_cache_or_discovery_revival() {
+    let root = TempDir::new().unwrap();
+    let ids = [
+        "01994115-9c41-70b5-bc40-851e5edca003",
+        "01994115-9c41-70b5-bc40-851e5edca004",
+    ];
+    let paths: Vec<_> = ids
+        .iter()
+        .map(|id| fixture(root.path(), id, &[meta(id), user("trashkeyword question")]))
+        .collect();
+    let originals: Vec<_> = paths.iter().map(|path| fs::read(path).unwrap()).collect();
+    management_commands(root.path());
+    let server = Server::start(root, &["--session", paths[0].to_str().unwrap()]);
+    let search = "/api/trail/search?q=trashkeyword";
+    server.wait(search, |v| {
+        v["loading"] == false && v["results"].as_array().is_some_and(|rows| rows.len() == 2)
+    });
+    for (index, id) in ids.iter().enumerate() {
+        let key = server.key(id);
+        server.loaded(&key, 1);
+        let route = format!("/api/session/{key}/trash");
+        assert_eq!(
+            server.post(&route, &json!({"confirm":true})).json()["trashed"],
+            true
+        );
+        assert!(!paths[index].exists());
+        assert_eq!(
+            fs::read(
+                server
+                    .root
+                    .path()
+                    .join("data/Trash/files")
+                    .join(paths[index].file_name().unwrap())
+            )
+            .unwrap(),
+            originals[index]
+        );
+        for old in [
+            format!("/api/session/{key}"),
+            format!("/api/session/{key}/turn/0"),
+            format!("/api/trail/session/{key}"),
+        ] {
+            assert_eq!(server.get(&old).status, 404, "{old}");
+        }
+        assert_eq!(server.post(&route, &json!({"confirm":true})).status, 404);
+        for _ in 0..2 {
+            server.get("/api/sessions?all=1&refresh=1").json();
+            assert_eq!(
+                server.sessions()["sessions"].as_array().unwrap().len(),
+                1 - index
+            );
+            let results = server.wait(search, |v| v["loading"] == false);
+            assert_eq!(results["results"].as_array().unwrap().len(), 1 - index);
+            assert!(!results["results"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|row| row["sessionKey"] == key));
+        }
+    }
+    assert!(server.get("/api/info").json()["initial_session"].is_null());
+    let server = server.restart(&[]);
+    assert_eq!(server.sessions()["sessions"], json!([]));
+    assert_eq!(
+        server.wait(search, |v| v["loading"] == false)["results"],
+        json!([])
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn web_management_rejects_external_paths_codex_path_mismatch_and_failed_trash() {
+    let root = TempDir::new().unwrap();
+    let id = "01994115-9c41-70b5-bc40-851e5edca005";
+    let path = fixture(root.path(), id, &[meta(id), user("protected")]);
+    let original = fs::read(&path).unwrap();
+    let external = root.path().join("external.jsonl");
+    fs::write(&external, lines(&[meta("external"), user("external")])).unwrap();
+    let external_original = fs::read(&external).unwrap();
+    management_commands(root.path());
+    fs::write(root.path().join("wrong-codex-path"), "").unwrap();
+    fs::write(root.path().join("fail-trash"), "").unwrap();
+    let server = Server::start(root, &["--session", external.to_str().unwrap()]);
+    let external_key = server.get("/api/info").json()["initial_session"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    server.loaded(&external_key, 1);
+    assert!(
+        server
+            .post(
+                &format!("/api/session/{external_key}/trash"),
+                &json!({"confirm":true})
+            )
+            .status
+            >= 400
+    );
+    assert!(!server.root.path().join("gio-calls.jsonl").exists());
+    assert_eq!(fs::read(&external).unwrap(), external_original);
+    let key = server.key(id);
+    assert!(
+        server
+            .post(
+                &format!("/api/session/{key}/rename"),
+                &json!({"name":"must not apply"})
+            )
+            .status
+            >= 400
+    );
+    let calls = fs::read_to_string(server.root.path().join("codex-calls.jsonl")).unwrap();
+    assert!(!calls.contains("thread/name/set"));
+    assert!(!server
+        .root
+        .path()
+        .join("codex/session_index.jsonl")
+        .exists());
+    assert!(
+        server
+            .post(
+                &format!("/api/session/{key}/trash"),
+                &json!({"confirm":true})
+            )
+            .status
+            >= 400
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    assert_eq!(server.key(id), key);
+    assert_eq!(server.loaded(&key, 1)["meta"]["id"], id);
 }

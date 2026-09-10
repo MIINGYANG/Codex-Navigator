@@ -90,3 +90,9 @@ codex-nav --web    # 网页版，自动打开浏览器
 ```
 
 终端版用 `q` 退出（搜索时先按 `Esc`），或用 `Ctrl+C`；网页版前台服务用 `Ctrl+C` 停止。后台启动仅停止你创建并核实的那个进程，不用按名称批量杀进程。关闭浏览器标签页不会停止服务，停止 Navigator 不影响 Codex。
+
+## Web 会话管理验收边界（3.0.0）
+
+浏览和 doctor 保持只读；用户在网页主动改名/确认删除时才写入。改名需要 PATH 中的 Codex CLI，使用官方 app-server 元数据接口，会更新 CODEX_HOME 名称索引/数据库，也可能初始化 Codex 状态文件；不请求模型或恢复对话。删除当前仅支持 Linux `gio trash`，只移动选定 rollout，不永久删除或清理 Codex 数据库，恢复后需重启 Navigator。
+
+安装指令不授权拿真实会话做改名/删除验收。管理测试必须隔离 CODEX_HOME、XDG_CONFIG_HOME、XDG_DATA_HOME，只创建合成会话；浏览器确认名称、cwd、取消无变化、成功和错误反馈，再核对 Codex 读回和回收站源字节。不要调用 `codex delete`、`thread/delete` 或永久删除命令。

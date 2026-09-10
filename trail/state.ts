@@ -20,7 +20,7 @@ export type SearchResult = {
 export function titleOf(session?: SessionSummary) {
   return (
     (
-      [session?.first_prompt, session?.title, session?.id].find((value) =>
+      [session?.title, session?.first_prompt, session?.id].find((value) =>
         value?.trim(),
       ) || "未命名会话"
     )
@@ -29,6 +29,20 @@ export function titleOf(session?: SessionSummary) {
       .find((line) => line.trim())
       ?.replace(/\s+/g, " ") || "未命名会话"
   );
+}
+
+export function reconcileSessions(
+  sessions: SessionSummary[],
+  renamed: ReadonlyMap<string, string>,
+  deleted: ReadonlySet<string>,
+) {
+  return sessions
+    .filter((session) => !deleted.has(session.key))
+    .map((session) =>
+      renamed.has(session.key)
+        ? { ...session, title: renamed.get(session.key)! }
+        : session,
+    );
 }
 
 export function relativeTime(

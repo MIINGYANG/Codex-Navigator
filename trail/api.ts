@@ -34,6 +34,31 @@ export async function api<T>(path: string, signal?: AbortSignal): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+export async function manageSession<T>(
+  key: string,
+  action: "rename" | "trash",
+  body: { name: string } | { confirm: true },
+): Promise<T> {
+  const response = await fetch(
+    `/api/session/${encodeURIComponent(key)}/${action}`,
+    {
+      method: "POST",
+      headers: {
+        "X-Codex-Nav-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    },
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new Error(
+      result?.error || `会话操作失败（${response.status}），请稍后重试。`,
+    );
+  return result as T;
+}
+
 // Fetch-based SSE keeps the secret in a header, never the URL or server access log.
 export async function subscribe(
   key: string,

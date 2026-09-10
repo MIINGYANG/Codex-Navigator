@@ -4,6 +4,7 @@ pub mod config;
 pub mod discovery;
 pub mod domain;
 pub mod index;
+mod management;
 pub mod parser;
 pub mod ui;
 pub mod util;

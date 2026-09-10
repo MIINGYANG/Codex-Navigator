@@ -1,9 +1,9 @@
 [package]
 name = "codex-navigator"
-version = "2.1.0"
+version = "3.0.0"
 edition = "2021"
 rust-version = "1.88"
-description = "Read-only local terminal and web sidecar for Codex sessions"
+description = "Local terminal and web navigator with explicit Codex session management"
 license = "MIT"
 default-run = "codex-nav"
 

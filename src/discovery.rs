@@ -244,7 +244,7 @@ fn collect_history(dir: &Path, depth: usize, paths: &mut Vec<PathBuf>) -> Result
     Ok(())
 }
 
-fn read_summary(path: &Path, config: &Config) -> Result<SessionSummary> {
+pub(crate) fn read_summary(path: &Path, config: &Config) -> Result<SessionSummary> {
     let file = File::open(path)?;
     let metadata = file.metadata()?;
     let modified = metadata.modified().ok().map(DateTime::<Utc>::from);
@@ -323,6 +323,13 @@ fn bounded_line(reader: &mut impl BufRead, limit: usize) -> std::io::Result<Opti
 }
 
 type IndexEntry = (Option<String>, Option<DateTime<Utc>>);
+
+pub(crate) fn session_names(home: &Path) -> HashMap<String, String> {
+    read_index(&home.join("session_index.jsonl"))
+        .into_iter()
+        .filter_map(|(id, (title, _))| title.filter(|v| !v.trim().is_empty()).map(|v| (id, v)))
+        .collect()
+}
 
 fn read_index(path: &Path) -> HashMap<String, IndexEntry> {
     let mut entries = HashMap::new();

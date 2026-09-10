@@ -5,7 +5,7 @@ use std::path::PathBuf;
 #[command(
     name = "codex-nav",
     version,
-    about = "Read-only local navigator for Codex sessions"
+    about = "Local Codex session navigator with web session management"
 )]
 pub struct Cli {
     /// Codex data directory (otherwise CODEX_HOME, then ~/.codex).

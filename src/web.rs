@@ -1,10 +1,11 @@
-//! Loopback-only HTTP adapter. All Codex access stays in the existing read-only core.
+//! Loopback-only reader with explicitly authenticated session management actions.
 use crate::{
     app::turn_text,
     config::Config,
     discovery,
     domain::{Session, SessionSummary, Turn, TurnItem, TurnStatus},
     index::SearchIndex,
+    management,
     watch::{SessionWorker, Update},
 };
 use anyhow::{Context, Result};
@@ -17,7 +18,7 @@ use axum::{
 };
 use serde_json::{json, Value};
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     future::{Future, IntoFuture},
     io::Write,
     path::PathBuf,
@@ -63,6 +64,7 @@ struct ApiRequest {
     path: String,
     query: HashMap<String, String>,
     reply: oneshot::Sender<ApiReply>,
+    mutation: Option<Value>,
 }
 
 struct ApiReply {
@@ -134,7 +136,7 @@ pub fn run(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> 
     run_inner(home, cwd, config, options)
 }
 
-/// Question Trail shares the verified read-only transport, not a second session parser.
+/// Question Trail shares the same transport and session parser.
 pub fn run_trail(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -> Result<()> {
     run(home, cwd, config, options)
 }
@@ -171,9 +173,13 @@ fn run_inner(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -
                     backend.tick();
                     match receiver.recv_timeout(Duration::from_millis(100)) {
                         Ok(request) => {
-                            let ApiRequest { path, query, reply } = request;
+                            let ApiRequest { path, query, reply, mutation } = request;
                             if !reply.is_closed() {
-                                let _ = reply.send(backend.route(&path, &query));
+                                let response = match mutation {
+                                    Some(body) => backend.mutate(&path, body),
+                                    None => backend.route(&path, &query),
+                                };
+                                let _ = reply.send(response);
                             }
                         }
                         Err(mpsc::RecvTimeoutError::Timeout) => (),
@@ -190,7 +196,7 @@ fn run_inner(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -
         };
         let router = Router::new().fallback(handle).with_state(state);
         println!(
-            "Codex Navigator Web · Question Trail — 本机只读，无 AI/API 调用，Ctrl+C 停止\n{url}"
+            "Codex Navigator Web · Question Trail — 本机浏览与会话管理，无模型调用，Ctrl+C 停止\n{url}"
         );
         std::io::stdout().flush()?;
         if !options.no_open {
@@ -387,8 +393,11 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
         )
         .response();
     }
+    if request.method() == Method::POST && management_target(path).is_some() {
+        return manage_request(state, request).await;
+    }
     if request.method() != Method::GET {
-        return ApiReply::error(StatusCode::METHOD_NOT_ALLOWED, "仅支持只读 GET 请求").response();
+        return ApiReply::error(StatusCode::METHOD_NOT_ALLOWED, "此地址仅支持 GET 请求").response();
     }
     if request.headers().contains_key(header::TRANSFER_ENCODING)
         || request
@@ -449,6 +458,7 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
             path: path.to_string(),
             query,
             reply,
+            mutation: None,
         })
         .is_err()
     {
@@ -457,6 +467,76 @@ async fn handle(State(state): State<HttpState>, request: Request) -> Response {
     match tokio::time::timeout(Duration::from_secs(10), receiver).await {
         Ok(Ok(reply)) => reply.response_with_permit(Some(permit)),
         _ => ApiReply::error(StatusCode::SERVICE_UNAVAILABLE, "读取超时，请重试").response(),
+    }
+}
+
+fn management_target(path: &str) -> Option<(&str, &str)> {
+    let rest = path.strip_prefix("/api/session/")?;
+    let (key, action) = rest.split_once('/')?;
+    if key.is_empty()
+        || key.len() > 64
+        || !key.bytes().all(|v| v.is_ascii_alphanumeric())
+        || !matches!(action, "rename" | "trash")
+    {
+        return None;
+    }
+    Some((key, action))
+}
+
+async fn manage_request(state: HttpState, request: Request) -> Response {
+    if unique_header(request.headers(), "origin")
+        != Some(format!("http://{}", state.authority).as_str())
+    {
+        return ApiReply::error(StatusCode::FORBIDDEN, "管理操作必须来自本机网页").response();
+    }
+    if request.uri().query().is_some()
+        || unique_header(request.headers(), "content-type")
+            .is_none_or(|v| v.split(';').next().map(str::trim) != Some("application/json"))
+    {
+        return ApiReply::error(
+            StatusCode::BAD_REQUEST,
+            "管理操作需要 JSON 正文且不能携带查询参数",
+        )
+        .response();
+    }
+    let Ok(permit) = state.capacity.clone().try_acquire_owned() else {
+        return ApiReply::error(StatusCode::SERVICE_UNAVAILABLE, "请求繁忙，请稍后重试").response();
+    };
+    let path = request.uri().path().to_owned();
+    let bytes = match tokio::time::timeout(
+        Duration::from_secs(5),
+        axum::body::to_bytes(request.into_body(), 4096),
+    )
+    .await
+    {
+        Ok(Ok(bytes)) => bytes,
+        _ => {
+            return ApiReply::error(StatusCode::BAD_REQUEST, "请求正文无效或超过 4 KiB").response()
+        }
+    };
+    let Ok(body) = serde_json::from_slice::<Value>(&bytes) else {
+        return ApiReply::error(StatusCode::BAD_REQUEST, "JSON 正文无效").response();
+    };
+    let (reply, receiver) = oneshot::channel();
+    if state
+        .sender
+        .try_send(ApiRequest {
+            path,
+            query: HashMap::new(),
+            reply,
+            mutation: Some(body),
+        })
+        .is_err()
+    {
+        return ApiReply::error(StatusCode::SERVICE_UNAVAILABLE, "服务暂不可用").response();
+    }
+    match tokio::time::timeout(Duration::from_secs(30), receiver).await {
+        Ok(Ok(reply)) => reply.response_with_permit(Some(permit)),
+        _ => ApiReply::error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "管理操作超时，请刷新核对会话状态后重试",
+        )
+        .response(),
     }
 }
 
@@ -495,6 +575,7 @@ async fn trail_events(state: HttpState, request: Request) -> Response {
                     path: path.clone(),
                     query: HashMap::new(),
                     reply,
+                    mutation: None,
                 })
                 .is_err()
             {
@@ -594,6 +675,8 @@ struct Backend {
     default_all: bool,
     initial_session: Option<String>,
     registered: HashMap<String, Registered>,
+    trashed: HashSet<String>,
+    names: HashMap<String, String>,
     paths: HashMap<PathBuf, String>,
     listings: [Option<Vec<Value>>; 2],
     scan_error: [Option<String>; 2],
@@ -733,6 +816,8 @@ impl Backend {
             default_all,
             initial_session: None,
             registered: HashMap::new(),
+            trashed: HashSet::new(),
+            names: HashMap::new(),
             paths: HashMap::new(),
             listings: [None, None],
             scan_error: [None, None],
@@ -774,19 +859,20 @@ impl Backend {
     }
 
     fn safe_target(&self, key: &str) -> bool {
-        self.registered.get(key).is_some_and(|registered| {
-            let Ok(current) = registered.path.canonicalize() else {
-                return false;
-            };
-            current == registered.path
-                && current.is_file()
-                && (registered.explicit
-                    || self
-                        .home
-                        .join("sessions")
-                        .canonicalize()
-                        .is_ok_and(|root| current.starts_with(root)))
-        })
+        !self.trashed.contains(key)
+            && self.registered.get(key).is_some_and(|registered| {
+                let Ok(current) = registered.path.canonicalize() else {
+                    return false;
+                };
+                current == registered.path
+                    && current.is_file()
+                    && (registered.explicit
+                        || self
+                            .home
+                            .join("sessions")
+                            .canonicalize()
+                            .is_ok_and(|root| current.starts_with(root)))
+            })
     }
 
     fn start_scan(&mut self, all: bool) {
@@ -817,6 +903,7 @@ impl Backend {
             self.scan = None;
             match result {
                 Ok(mut sessions) => {
+                    self.names = discovery::session_names(&self.home);
                     sessions.sort_by(|a, b| {
                         b.updated_at
                             .cmp(&a.updated_at)
@@ -826,7 +913,10 @@ impl Backend {
                     let mut truncated = sessions.len() > MAX_SESSIONS;
                     for summary in sessions.into_iter().take(MAX_SESSIONS) {
                         if let Ok(key) = self.register(summary.path, false) {
-                            listing.push(json!({"key":key,"id":summary.id,"title":summary.title,"cwd":summary.cwd.map(|p|p.to_string_lossy().into_owned()),"updated_at":summary.updated_at.map(|t|t.to_rfc3339()),"turn_count":summary.turn_count,"first_prompt":summary.first_prompt}));
+                            if self.trashed.contains(&key) || !self.safe_target(&key) {
+                                continue;
+                            }
+                            listing.push(json!({"key":key,"id":summary.id,"title":self.names.get(&summary.id).or(summary.title.as_ref()),"cwd":summary.cwd.map(|p|p.to_string_lossy().into_owned()),"updated_at":summary.updated_at.map(|t|t.to_rfc3339()),"turn_count":summary.turn_count,"first_prompt":summary.first_prompt}));
                         } else if self.registered.len() >= MAX_SESSIONS {
                             truncated = true;
                         }
@@ -914,14 +1004,110 @@ impl Backend {
         Ok(open)
     }
 
+    fn restart_search_index(&mut self) {
+        // Dropping an in-flight index also drops other sessions' pending results.
+        // Forget every signature so unchanged survivors are scheduled again.
+        self.search_worker = None;
+        self.search_signature.clear();
+        self.search_refresh_requested = true;
+    }
+
+    fn mutate(&mut self, route: &str, body: Value) -> ApiReply {
+        self.tick();
+        let Some((key, action)) = management_target(route) else {
+            return ApiReply::error(StatusCode::NOT_FOUND, "管理接口不存在");
+        };
+        if !self.safe_target(key) {
+            return ApiReply::error(StatusCode::NOT_FOUND, "会话不存在或路径已改变，请刷新列表");
+        }
+        let path = self.registered[key].path.clone();
+        let Some(fields) = body.as_object().filter(|v| v.len() == 1) else {
+            return ApiReply::error(StatusCode::BAD_REQUEST, "管理参数无效");
+        };
+        let response = if action == "rename" {
+            let Some(name) = fields.get("name").and_then(Value::as_str) else {
+                return ApiReply::error(StatusCode::BAD_REQUEST, "需要有效的会话名称");
+            };
+            if name.trim().is_empty()
+                || name.trim().chars().count() > 100
+                || name.chars().any(char::is_control)
+            {
+                return ApiReply::error(
+                    StatusCode::BAD_REQUEST,
+                    "名称须为 1–100 个字符，不能包含控制字符",
+                );
+            }
+            let Ok(summary) = discovery::read_summary(&path, &self.config) else {
+                return ApiReply::error(StatusCode::CONFLICT, "无法核对会话身份，请刷新列表");
+            };
+            match management::rename(&self.home, &path, &summary.id, name) {
+                Ok(name) => {
+                    self.names.insert(summary.id, name.clone());
+                    for listing in self.listings.iter_mut().flatten() {
+                        for session in listing.iter_mut().filter(|s| s["key"] == key) {
+                            session["title"] = json!(name);
+                        }
+                    }
+                    ApiReply::json(json!({"name":name}))
+                }
+                Err(error) => return ApiReply::error(StatusCode::CONFLICT, &error.to_string()),
+            }
+        } else {
+            if fields.get("confirm") != Some(&Value::Bool(true)) {
+                return ApiReply::error(StatusCode::BAD_REQUEST, "移到回收站前必须确认");
+            }
+            if let Err(error) = management::trash(&self.home, &path) {
+                return ApiReply::error(StatusCode::CONFLICT, &error.to_string());
+            }
+            self.trashed.insert(key.to_owned());
+            self.open.remove(key);
+            self.lru.retain(|v| v != key);
+            for listing in self.listings.iter_mut().flatten() {
+                listing.retain(|s| s["key"] != key);
+            }
+            self.search.rows.retain(|row| row.key != key);
+            self.search.counts.remove(key);
+            self.restart_search_index();
+            if self.initial_session.as_deref() == Some(key) {
+                self.initial_session = None;
+            }
+            ApiReply::json(json!({"trashed":true}))
+        };
+        // Discard scans captured before the mutation; their worker exits when the receiver drops.
+        self.scan = None;
+        self.pending = [false; 2];
+        self.start_scan(true);
+        response
+    }
+
     fn route(&mut self, path: &str, query: &HashMap<String, String>) -> ApiReply {
         self.tick();
         if path == "/api/health" {
-            return ApiReply::json(json!({"ok":true,"readOnly":true,"localOnly":true}));
+            return ApiReply::json(json!({"ok":true,"readOnly":false,"localOnly":true}));
         }
         if path == "/api/trail/search" {
             self.ensure_search();
-            let results = trail::search(&self.search, query.get("q").map_or("", String::as_str));
+            self.search
+                .rows
+                .retain(|row| !self.trashed.contains(&row.key));
+            let mut results =
+                trail::search(&self.search, query.get("q").map_or("", String::as_str));
+            for result in &mut results {
+                if let Some(summary) = self
+                    .listings
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .find(|s| s["key"] == result["sessionKey"])
+                {
+                    if summary["title"]
+                        .as_str()
+                        .is_some_and(|v| !v.trim().is_empty())
+                    {
+                        result["sessionTitle"] = summary["title"].clone();
+                    }
+                }
+            }
             return ApiReply::json(
                 json!({"loading":self.search_worker.is_some() || self.search_deferred || self.scan.is_some(),"results":results,"truncated":self.search.truncated || results.len() >= 100}),
             );
@@ -940,9 +1126,10 @@ impl Backend {
             };
             let (nodes, edges, notices) = trail::graph(&open.session);
             let stats = &open.session.parse_stats;
-            return ApiReply::json(
-                json!({"key":key,"meta":{"cwd":open.session.meta.cwd.as_ref().map(|p|p.to_string_lossy())},"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices}),
-            );
+            let id = open.session.meta.id.clone();
+            let mut response = json!({"key":key,"meta":{"id":id,"cwd":open.session.meta.cwd.as_ref().map(|p|p.to_string_lossy())},"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices});
+            response["meta"]["title"] = json!(self.names.get(&id));
+            return ApiReply::json(response);
         }
         if path == "/api/info" {
             return ApiReply::json(
@@ -1290,6 +1477,35 @@ mod tests {
             backend.get_session(&keys[0], false).unwrap().generation,
             original
         );
+    }
+
+    #[test]
+    fn cancelled_index_restarts_unchanged_surviving_sessions() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("sessions");
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("rollout-survivor.jsonl");
+        std::fs::write(&path, "{\"type\":\"event_msg\",\"payload\":{\"type\":\"user_message\",\"message\":\"surviving question\"}}\n").unwrap();
+        let mut backend = Backend::new(
+            root.path().to_owned(),
+            root.path().to_owned(),
+            Config::default(),
+            true,
+        );
+        let key = backend.register(path, false).unwrap();
+        backend.listings[1] = Some(vec![json!({"key":key})]);
+        backend.ensure_search();
+        assert!(backend.search_worker.is_some());
+        assert!(!backend.search_signature.is_empty());
+        assert!(backend.search.rows.is_empty());
+        backend.restart_search_index();
+        backend.ensure_search();
+        let deadline = std::time::Instant::now() + Duration::from_secs(3);
+        while backend.search_worker.is_some() && std::time::Instant::now() < deadline {
+            backend.tick();
+            thread::sleep(Duration::from_millis(5));
+        }
+        assert_eq!(trail::search(&backend.search, "surviving").len(), 1);
     }
 
     #[test]

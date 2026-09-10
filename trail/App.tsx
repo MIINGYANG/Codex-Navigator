@@ -28,12 +28,18 @@ import {
 import Canvas, { type CanvasHandle } from "./Canvas";
 import ThemeSwitch from "./ThemeSwitch";
 import ProjectPath from "./ProjectPath";
+import SessionActionDialog, {
+  SessionActions,
+  type SessionAction,
+  type SessionTarget,
+} from "./SessionActions";
 import type { QuestionGraph, QuestionNode } from "./graph";
 import { api, subscribe } from "./api";
 import {
   fullTime,
   groupResults,
   reconcileSelection,
+  reconcileSessions,
   initialLoadTransition,
   relativeTime,
   titleOf,
@@ -43,7 +49,7 @@ import {
 
 type GraphResponse = QuestionGraph & {
   key: string;
-  meta: { cwd: string | null };
+  meta: { cwd: string | null; id?: string | null; title?: string | null };
   generation: number;
   revision: number;
   loading: boolean;
@@ -117,6 +123,13 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [watch, setWatch] = useState(true);
   const [toast, setToast] = useState("");
+  const [sessionAction, setSessionAction] = useState<{
+    session: SessionTarget;
+    action: SessionAction;
+  } | null>(null);
+  const renamedSessions = useRef(new Map<string, string>());
+  const renamedGraphs = useRef(new Map<string, string>());
+  const deletedSessions = useRef(new Set<string>());
   const canvas = useRef<CanvasHandle>(null);
   const graphRef = useRef<GraphResponse | null>(null);
   const requestedNode = useRef<{ key: string; id: string } | null>(null);
@@ -131,10 +144,15 @@ export default function App() {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout>;
     let busy = false;
+    let rescanPending = false;
     let configured = false;
     let autoWatch = true;
     async function scan(rescan = false) {
-      if (busy || controller.signal.aborted) return;
+      if (controller.signal.aborted) return;
+      if (busy) {
+        rescanPending ||= rescan;
+        return;
+      }
       busy = true;
       clearTimeout(timer);
       let delay = 15000;
@@ -162,13 +180,22 @@ export default function App() {
           controller.signal,
         );
         if (controller.signal.aborted) return;
-        setSessions(data.sessions);
+        for (const session of data.sessions) {
+          if (renamedSessions.current.get(session.key) === session.title)
+            renamedSessions.current.delete(session.key);
+        }
+        const nextSessions = reconcileSessions(
+          data.sessions,
+          renamedSessions.current,
+          deletedSessions.current,
+        );
+        setSessions(nextSessions);
         setSessionsLoading(data.loading);
         setSessionError(data.error || "");
         if (data.loading) delay = 500;
-        if (!initialSelection.current && data.sessions.length) {
+        if (!initialSelection.current && nextSessions.length) {
           initialSelection.current = true;
-          setKey(data.sessions[0].key);
+          setKey(nextSessions[0].key);
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -178,6 +205,11 @@ export default function App() {
         delay = 3000;
       } finally {
         busy = false;
+        if (rescanPending && !controller.signal.aborted) {
+          rescanPending = false;
+          void scan(true);
+          return;
+        }
         if (!controller.signal.aborted)
           timer = setTimeout(
             () => void scan(autoWatch && delay === 15000),
@@ -225,14 +257,25 @@ export default function App() {
           `/api/trail/session/${encodeURIComponent(sessionKey)}${suffix}`,
           controller.signal,
         );
-        if (controller.signal.aborted) return;
+        if (
+          controller.signal.aborted ||
+          deletedSessions.current.has(sessionKey)
+        )
+          return;
+        const renamed = renamedGraphs.current.get(sessionKey);
+        if (renamed !== undefined) {
+          if (next.meta.title === renamed)
+            renamedGraphs.current.delete(sessionKey);
+          else next.meta = { ...next.meta, title: renamed };
+        }
         const previous = graphRef.current;
         const changed =
           !previous ||
           previous.generation !== next.generation ||
           previous.revision !== next.revision ||
           previous.loading !== next.loading ||
-          previous.error !== next.error;
+          previous.error !== next.error ||
+          previous.meta.title !== next.meta.title;
         if (changed) {
           graphRef.current = next;
           setGraph(next);
@@ -314,17 +357,19 @@ export default function App() {
     [selectNode],
   );
   const closeOverlays = useCallback(() => {
+    if (sessionAction) return;
     if (searchOpen) setSearchOpen(false);
     else if (sidebarOpen) setSidebarOpen(false);
     else if (selectedId) {
       setSelectedId(null);
       setFocusPath(false);
     } else if (expanded) setExpanded(false);
-  }, [searchOpen, sidebarOpen, selectedId, expanded]);
+  }, [searchOpen, sidebarOpen, selectedId, expanded, sessionAction]);
   useEscape(closeOverlays);
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
+      if (sessionAction) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setSearchOpen(true);
@@ -359,7 +404,51 @@ export default function App() {
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [graph, selected, searchOpen, navigate]);
+  }, [graph, selected, searchOpen, navigate, sessionAction]);
+
+  function manage(session: SessionTarget, action: SessionAction) {
+    setSearchOpen(false);
+    setSessionAction({ session, action });
+  }
+  function renamed(sessionKey: string, name: string) {
+    renamedSessions.current.set(sessionKey, name);
+    renamedGraphs.current.set(sessionKey, name);
+    setSessions((items) =>
+      reconcileSessions(
+        items,
+        renamedSessions.current,
+        deletedSessions.current,
+      ),
+    );
+    if (graphRef.current?.key === sessionKey) {
+      const next = {
+        ...graphRef.current,
+        meta: { ...graphRef.current.meta, title: name },
+      };
+      graphRef.current = next;
+      setGraph(next);
+    }
+    refreshSessions.current();
+    setToast("会话名称已同步到 Codex");
+  }
+  function trashed(sessionKey: string) {
+    deletedSessions.current.add(sessionKey);
+    renamedSessions.current.delete(sessionKey);
+    renamedGraphs.current.delete(sessionKey);
+    const remaining = sessions.filter((session) => session.key !== sessionKey);
+    setSessions(remaining);
+    setSearchOpen(false);
+    if (key === sessionKey) {
+      requestedNode.current = null;
+      graphRef.current = null;
+      setGraph(null);
+      setSelectedId(null);
+      setFocusPath(false);
+      setKey(remaining[0]?.key || null);
+    }
+    refreshSessions.current();
+    setToast("会话文件已移到系统回收站");
+  }
 
   function chooseSession(next: string) {
     requestedNode.current = null;
@@ -386,6 +475,12 @@ export default function App() {
       .includes(sessionQuery.trim().toLocaleLowerCase()),
   );
   const warnings = [...(graph?.notices || [])];
+  const currentTitle = currentSession
+    ? titleOf(currentSession)
+    : graph?.meta.title?.trim() ||
+      graph?.nodes[0]?.title ||
+      graph?.meta.id ||
+      "把问题串起来，看清来路。";
   if (graph?.stats?.malformed_records)
     warnings.push(`${graph.stats.malformed_records} 条损坏记录已跳过`);
   if (graph?.stats?.skipped_oversize_records)
@@ -465,29 +560,38 @@ export default function App() {
             </div>
           )}
           {visibleSessions.map((session) => (
-            <button
-              key={session.key}
-              className={`session-item ${session.key === key ? "active" : ""}`}
-              aria-current={session.key === key ? "true" : undefined}
-              onClick={() => chooseSession(session.key)}
-              title={`${titleOf(session)}\n${session.cwd || "项目未记录"}`}
-            >
-              <MessageCircle size={17} />
-              <span className="session-copy">
-                <strong>{titleOf(session)}</strong>
-                <span>
-                  {session.key === key && graph
-                    ? `${graph.nodes.length} 个问题`
-                    : session.turn_count !== null
-                      ? `${session.turn_count} 个问题`
-                      : "等待索引"}
-                  <i>·</i>
-                  {relativeTime(session.updated_at)}
+            <div className="session-row" key={session.key}>
+              <button
+                className={`session-item ${session.key === key ? "active" : ""}`}
+                aria-current={session.key === key ? "true" : undefined}
+                onClick={() => chooseSession(session.key)}
+                title={`${titleOf(session)}\n${session.cwd || "项目未记录"}`}
+              >
+                <MessageCircle size={17} />
+                <span className="session-copy">
+                  <strong>{titleOf(session)}</strong>
+                  <span>
+                    {session.key === key && graph
+                      ? `${graph.nodes.length} 个问题`
+                      : session.turn_count !== null
+                        ? `${session.turn_count} 个问题`
+                        : "等待索引"}
+                    <i>·</i>
+                    {relativeTime(session.updated_at)}
+                  </span>
+                  <small>{session.cwd || "项目路径未记录"}</small>
                 </span>
-                <small>{session.cwd || "项目路径未记录"}</small>
-              </span>
-              <ChevronRight size={14} />
-            </button>
+                <ChevronRight size={14} />
+              </button>
+              <SessionActions
+                session={{
+                  key: session.key,
+                  title: titleOf(session),
+                  cwd: session.cwd,
+                }}
+                onAction={manage}
+              />
+            </div>
           ))}
           {!sessionsLoading && !visibleSessions.length && (
             <p className="quiet-empty">
@@ -512,7 +616,7 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Codex Navigator 2.1</span>
+          <span className="version">Codex Navigator 3.0</span>
         </div>
       </aside>
 
@@ -565,17 +669,19 @@ export default function App() {
                   我的会话 <ChevronRight size={12} />
                   <span>问题脉络</span>
                 </div>
-                <h1
-                  title={
-                    currentSession
-                      ? titleOf(currentSession)
-                      : graph?.nodes[0]?.title
-                  }
-                >
-                  {currentSession
-                    ? titleOf(currentSession)
-                    : graph?.nodes[0]?.title || "把问题串起来，看清来路。"}
-                </h1>
+                <div className="session-heading-title">
+                  <h1 title={currentTitle}>{currentTitle}</h1>
+                  {key && (currentSession || graph) && (
+                    <SessionActions
+                      session={{
+                        key,
+                        title: currentTitle,
+                        cwd: graph?.meta.cwd ?? currentSession?.cwd ?? null,
+                      }}
+                      onAction={manage}
+                    />
+                  )}
+                </div>
                 <p>
                   {graph ? `${graph.nodes.length} 个问题` : "本地 Codex 会话"}
                   <span>·</span>连线仅表示记录中的顺序与分支
@@ -773,6 +879,15 @@ export default function App() {
         <SearchDialog
           onClose={() => setSearchOpen(false)}
           onChoose={chooseResult}
+        />
+      )}
+      {sessionAction && (
+        <SessionActionDialog
+          session={sessionAction.session}
+          action={sessionAction.action}
+          onClose={() => setSessionAction(null)}
+          onRenamed={renamed}
+          onTrashed={trashed}
         />
       )}
       {toast && (
