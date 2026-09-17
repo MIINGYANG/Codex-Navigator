@@ -233,3 +233,9 @@
 **Key insight:** 版本输出确认目标设备尚未安装3.2.1，仍会直接将来源rollout移入回收站。用户终端执行的是真正/delete，不能改述为归档；本机0.153.2静态证据与用户0.153.4行为需分开表述。
 **Details / snippet:** 3.2.1保护已完成合成验收但尚未推送；再次缺失的中间来源恢复仍待用户确认。本轮只补版本证据，git diff --check通过，不重复应用测试。
 **Tags:** #version #deployment #delete #verification
+
+## 2026-09-17 — 3.2.1 推送与本机安装验收
+**Question:** 如何让已完成的来源依赖保护真正交付到可更新版本？
+**Key insight:** 核对远程祖先和新标签后原子推送，再安装与核验产物；源码、安装文件和网页运行版本分别验证。没有旧网页服务时无需重启或擅自启动真实会话服务，可用隔离服务检查安装版实际版本。
+**Details / snippet:** main/v3.2.1读回f0c3283/f7837ff；本机两个命令在/tmp的新登录Bash中均为3.2.1，安装哈希匹配release；隔离/api/info为3.2.1、首页HTTP200，验收进程已退出。/home/lmy不可达，不能把本机安装当成另一设备已更新；那台设备需重新安装并启动服务，升级不补回被删除来源。
+**Tags:** #release #installation #verification #lineage
