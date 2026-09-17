@@ -182,3 +182,10 @@
 **Key insight:** 覆盖Cargo安装文件不会替换已运行进程持有的旧程序映像。核实进程身份和启动参数后精确重启，并使用认证info检查运行版本；新终端命令版本、安装文件哈希和网页运行版本都应一致。
 **Details / snippet:** main/v3.1.1已读回确认功能提交196adbe；本地两个入口更新3.1.1，新Bash在/tmp可用，安装哈希匹配release，隔离HTTP镜像去重验收通过。旧服务以SIGINT退出，新版在原端口启动；令牌仅存用户私有日志，使用新URL打开页面，不复用旧页面的失效认证。
 **Tags:** #installation #release #process #verification
+
+
+## 2026-09-17 — 临时侧聊留存须先验证数据入口
+**Question:** 能否打开 Navigator 后自动保存 /btw 并挂到原问题旁？
+**Key insight:** 界面分支和历史文件监听不能创造不存在于磁盘的内容；临时侧聊是内存分支，需要验证实际承载 CLI 的服务是否支持完整被动事件与可靠父轮次。稳定身份、关联位置、内容完整性应分开处理；收不到的内容要标缺口，不以时间邻近猜关系，也不能把留存副本冒充可 resume 的 Codex 会话。
+**Details / snippet:** 独立 HTML 预览保留原问题画布，青色侧聊按需展开，右栏问答、收藏/重命名/导出及可恢复移除均使用合成数据；1848/1280/390px 共123项浏览器检查通过，另验证拖拽/缩放/小地图。正式采集尚未实现。候选共享 app-server 与 Hooks 需隔离 PoC；[官方命令](https://learn.chatgpt.com/docs/developer-commands?surface=cli)、[app-server](https://learn.chatgpt.com/docs/app-server)、[Hooks](https://learn.chatgpt.com/docs/hooks)。
+**Tags:** #btw #ephemeral #sidecar #prototype #provenance #verification
