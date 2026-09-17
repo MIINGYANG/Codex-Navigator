@@ -161,3 +161,10 @@
 **Key insight:** 新功能通过不等于既有路径通过，应在最终内嵌前端的release二进制上完成原画布、窄屏、管理与终端回归。浏览器节点存在不等于ReactFlow完成边测量；验收应等待真实绘制关系，不能用恰好赶上某一帧的断言代替状态检查。
 **Details / snippet:** 原画布1672/1000/390px、管理1848/390px、终端6组均通过；README合成浅深截图同步。隔离环境的gio restore不可用时仅精确移回测试创建的合成文件并保留trashinfo，不改变产品删除语义。全局安装和GitHub远程未自动更新；交付本地3.1.0源码、release二进制与版本标签。
 **Tags:** #release #regression #browser #terminal #documentation
+
+
+## 2026-09-17 — 3.1.0 跨设备更新发布
+**Question:** 如何将已验收的新版本推送到GitHub供其他设备更新？
+**Key insight:** 先核对远程main是本地祖先、发布标签尚不存在，再非强制原子推送分支与标签，并读回远程引用确认。同步验收记录可另作main文档提交，已发布版本标签仍指向通过测试的功能提交。
+**Details / snippet:** main与v3.1.0首次推送均确认到e61dbc56e73b41e04ae2e0f75fb47e17beae12c1；其他设备在任意目录执行README的cargo install --git命令，确认3.1.0后重启网页服务。运行中的旧进程不会随安装自动升级。
+**Tags:** #git #release #installation #verification
