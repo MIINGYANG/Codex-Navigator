@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::{
-    domain::{ParseStats, Session, SessionMeta, SessionSummary, Turn, TurnItem},
+    domain::{ParseStats, Session, SessionEvent, SessionMeta, SessionSummary, Turn, TurnItem},
     index::{prompt_text, score, SearchIndex},
     util::{sanitize, wrap},
 };
@@ -107,6 +107,10 @@ impl App {
         self.index.sync(&session.turns);
         self.session = Some(session);
         self.refresh_results_preserving_turn();
+    }
+
+    pub fn update_events(&mut self, events: Vec<SessionEvent>) {
+        self.session.get_or_insert_with(Session::default).events = events;
     }
 
     pub fn apply_update(

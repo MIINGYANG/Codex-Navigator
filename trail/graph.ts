@@ -1,5 +1,26 @@
 import dagre from "@dagrejs/dagre";
 
+export interface SessionEvent {
+  id: string;
+  kind: "commit" | "compaction";
+  turn_index: number | null;
+  timestamp: string | null;
+  source: string;
+  hash?: string | null;
+  repository?: string | null;
+  branch?: string | null;
+  version?: string | null;
+  summary?: string;
+  trigger?: "auto" | "manual" | "unknown";
+}
+export interface CanvasLayout {
+  direction: "vertical" | "horizontal";
+  density: "comfortable" | "compact";
+}
+export const DEFAULT_LAYOUT: CanvasLayout = {
+  direction: "vertical",
+  density: "comfortable",
+};
 export interface QuestionNode {
   id: string;
   turnIndex: number;
@@ -9,6 +30,9 @@ export interface QuestionNode {
   timestamp: string | null;
   parentId?: string | null;
   isLatest: boolean;
+  favorite?: boolean;
+  bookmarkId?: string;
+  commits?: SessionEvent[];
 }
 export interface QuestionEdge {
   id: string;
@@ -75,20 +99,86 @@ export function visibleCanvasCenter(
 export const CARD_WIDTH = 280;
 export const CARD_HEIGHT = 108;
 
-export function linearPosition(index: number): Position {
-  const row = Math.floor(index / 2);
-  const column = row % 2 === 0 ? index % 2 : 1 - (index % 2);
-  return { x: column * (CARD_WIDTH + 110), y: row * (CARD_HEIGHT + 96) };
+export function layoutMetrics(
+  layout: CanvasLayout = DEFAULT_LAYOUT,
+  availableWidth = 670,
+) {
+  const compact = layout.density === "compact";
+  const width = compact ? 248 : CARD_WIDTH;
+  const height = compact ? 96 : CARD_HEIGHT;
+  const gapX = compact ? 54 : 110;
+  const gapY = compact ? 56 : 96;
+  const columns =
+    layout.direction === "horizontal"
+      ? Math.max(
+          2,
+          Math.min(
+            4,
+            Math.floor((Math.max(0, availableWidth) + gapX) / (width + gapX)),
+          ),
+        )
+      : 2;
+  return { width, height, gapX, gapY, columns, direction: layout.direction };
+}
+export function linearPosition(
+  index: number,
+  layout: CanvasLayout = DEFAULT_LAYOUT,
+  availableWidth = 670,
+): Position {
+  const { width, height, gapX, gapY, columns } = layoutMetrics(
+    layout,
+    availableWidth,
+  );
+  const row = Math.floor(index / columns);
+  const column =
+    row % 2 === 0 ? index % columns : columns - 1 - (index % columns);
+  return { x: column * (width + gapX), y: row * (height + gapY) };
+}
+
+/** A compaction belongs after its recorded turn; never invent a relationship. */
+export function compactionEdges(
+  graph: QuestionGraph,
+  events: SessionEvent[],
+): Map<string, SessionEvent[]> {
+  const index = indexGraph(graph);
+  const turns = new Map<number, QuestionNode[]>();
+  for (const node of graph.nodes) {
+    if (!turns.has(node.turnIndex)) turns.set(node.turnIndex, []);
+    turns.get(node.turnIndex)!.push(node);
+  }
+  const result = new Map<string, SessionEvent[]>();
+  for (const event of events) {
+    if (event.kind !== "compaction" || event.turn_index === null) continue;
+    const matches = turns.get(event.turn_index) ?? [];
+    if (matches.length !== 1) continue;
+    const node = matches[0];
+    const candidates = (index.outgoing.get(node.id) ?? []).filter(
+      (edge) =>
+        edge.type === "sequence" &&
+        index.nodes.get(edge.target)!.turnIndex > node.turnIndex,
+    );
+    if (candidates.length !== 1) continue;
+    const edgeId = candidates[0].id;
+    if (!result.has(edgeId)) result.set(edgeId, []);
+    result.get(edgeId)!.push(event);
+  }
+  return result;
 }
 
 export type PortSide = "top" | "bottom" | "left" | "right";
 export function edgePorts(
   source: Position,
   target: Position,
+  dimensions: {
+    width: number;
+    height: number;
+    direction?: CanvasLayout["direction"];
+  } = { width: CARD_WIDTH, height: CARD_HEIGHT },
 ): { source: PortSide; target: PortSide } {
   if (
-    Math.abs(target.y - source.y) < CARD_HEIGHT / 2 &&
-    Math.abs(target.x - source.x) >= CARD_WIDTH
+    (dimensions.direction === "horizontal" ||
+      Math.abs(target.y - source.y) < dimensions.height / 2) &&
+    Math.abs(target.x - source.x) >= dimensions.width
   ) {
     return target.x > source.x
       ? { source: "right", target: "left" }
@@ -174,18 +264,24 @@ export function highlightedPath(
   return { nodes, edges };
 }
 
-function overlaps(a: Position, b: Position): boolean {
-  return (
-    Math.abs(a.x - b.x) < CARD_WIDTH + 32 &&
-    Math.abs(a.y - b.y) < CARD_HEIGHT + 32
-  );
+function overlaps(
+  a: Position,
+  b: Position,
+  width: number,
+  height: number,
+): boolean {
+  return Math.abs(a.x - b.x) < width + 32 && Math.abs(a.y - b.y) < height + 32;
 }
 
 /** Stable append keeps both the viewport and previously dragged nodes undisturbed. */
 export function layoutGraph(
   graph: QuestionGraph,
   previous: Map<string, Position> = new Map(),
+  layout: CanvasLayout = DEFAULT_LAYOUT,
+  availableWidth = 670,
 ): Map<string, Position> {
+  const { width, height, gapX, gapY } = layoutMetrics(layout, availableWidth);
+  const horizontal = layout.direction === "horizontal";
   const positions = new Map<string, Position>();
   if (!graph.nodes.length) return positions;
   const links = validEdges(graph);
@@ -199,8 +295,8 @@ export function layoutGraph(
   const branched = [...outgoing.values()].some((count) => count > 1);
   if (previous.size) {
     const cells = new Map<string, Position[]>();
-    const cellWidth = CARD_WIDTH + 32;
-    const cellHeight = CARD_HEIGHT + 32;
+    const cellWidth = width + 32;
+    const cellHeight = height + 32;
     const cell = (position: Position) => [
       Math.floor(position.x / cellWidth),
       Math.floor(position.y / cellHeight),
@@ -216,7 +312,7 @@ export function layoutGraph(
         for (let dy = -1; dy <= 1; dy++) {
           if (
             (cells.get(`${x + dx}:${y + dy}`) ?? []).some((existing) =>
-              overlaps(position, existing),
+              overlaps(position, existing, width, height),
             )
           )
             return true;
@@ -234,11 +330,16 @@ export function layoutGraph(
       if (positions.has(node.id)) continue;
       const parent = positions.get(incoming.get(node.id) ?? "");
       const pos = !branched
-        ? linearPosition(index)
+        ? linearPosition(index, layout, availableWidth)
         : parent
-          ? { x: parent.x + 90, y: parent.y + CARD_HEIGHT + 96 }
-          : { x: 0, y: positions.size * (CARD_HEIGHT + 96) };
-      while (occupied(pos)) pos.x += CARD_WIDTH + 110;
+          ? horizontal
+            ? { x: parent.x + width + gapX, y: parent.y + 30 }
+            : { x: parent.x + 90, y: parent.y + height + gapY }
+          : { x: 0, y: positions.size * (height + gapY) };
+      while (occupied(pos)) {
+        if (horizontal && branched) pos.y += height + gapY;
+        else pos.x += width + gapX;
+      }
       positions.set(node.id, pos);
       remember(pos);
     }
@@ -247,30 +348,28 @@ export function layoutGraph(
   if (!branched) {
     // A long linear session needs no recursive graph algorithm (1000+ turns).
     ordered.forEach((node, index) =>
-      positions.set(node.id, linearPosition(index)),
+      positions.set(node.id, linearPosition(index, layout, availableWidth)),
     );
     return positions;
   }
   if (ordered.length <= 300) {
     const model = new dagre.graphlib.Graph()
       .setGraph({
-        rankdir: "TB",
-        nodesep: 110,
-        ranksep: 96,
+        rankdir: horizontal ? "LR" : "TB",
+        nodesep: horizontal ? gapY : gapX,
+        ranksep: horizontal ? gapX : gapY,
         marginx: 30,
         marginy: 30,
       })
       .setDefaultEdgeLabel(() => ({}));
-    ordered.forEach((node) =>
-      model.setNode(node.id, { width: CARD_WIDTH, height: CARD_HEIGHT }),
-    );
+    ordered.forEach((node) => model.setNode(node.id, { width, height }));
     links.forEach((edge) => model.setEdge(edge.source, edge.target));
     dagre.layout(model);
     ordered.forEach((node) => {
       const point = model.node(node.id);
       positions.set(node.id, {
-        x: point.x - CARD_WIDTH / 2,
-        y: point.y - CARD_HEIGHT / 2,
+        x: point.x - width / 2,
+        y: point.y - height / 2,
       });
     });
     // Dagre's equally valid horizontal mirror can put earlier questions on the
@@ -281,6 +380,7 @@ export function layoutGraph(
         (node) => !incoming.has(node.id) && (outgoing.get(node.id) ?? 0) > 1,
       ) ?? ordered.find((node) => (outgoing.get(node.id) ?? 0) > 1);
     if (fork) {
+      const axis = horizontal ? "y" : "x";
       const children = links
         .filter((edge) => edge.source === fork.id)
         .map((edge) => nodeById.get(edge.target)!)
@@ -289,11 +389,12 @@ export function layoutGraph(
       const next = children
         .slice(1)
         .map((node) => positions.get(node.id)!)
-        .find((point) => point.x !== first.x);
-      if (next && first.x > next.x) {
-        const xs = [...positions.values()].map((point) => point.x);
-        const extent = Math.min(...xs) + Math.max(...xs);
-        for (const point of positions.values()) point.x = extent - point.x;
+        .find((point) => point[axis] !== first[axis]);
+      if (next && first[axis] > next[axis]) {
+        const coordinates = [...positions.values()].map((point) => point[axis]);
+        const extent = Math.min(...coordinates) + Math.max(...coordinates);
+        for (const point of positions.values())
+          point[axis] = extent - point[axis];
       }
     }
     return positions;
@@ -323,10 +424,18 @@ export function layoutGraph(
     const level = rank.get(node.id) ?? 0;
     const slot = slots.get(level) ?? 0;
     slots.set(level, slot + 1);
-    positions.set(node.id, {
-      x: slot * (CARD_WIDTH + 110) + level * 30,
-      y: level * (CARD_HEIGHT + 96),
-    });
+    positions.set(
+      node.id,
+      horizontal
+        ? {
+            x: level * (width + gapX),
+            y: slot * (height + gapY) + level * 30,
+          }
+        : {
+            x: slot * (width + gapX) + level * 30,
+            y: level * (height + gapY),
+          },
+    );
   }
   return positions;
 }

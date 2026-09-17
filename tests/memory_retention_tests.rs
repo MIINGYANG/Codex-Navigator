@@ -366,11 +366,13 @@ fn receive_until(worker: &SessionWorker, app: &mut App, count: usize) {
                 stats,
                 revision,
                 turns,
+                events,
                 reset,
                 offset,
                 total,
             } => {
                 app.apply_update(meta, stats, revision, turns, reset);
+                app.update_events(events);
                 if offset == total && app.session.as_ref().is_some_and(|s| s.turns.len() == count) {
                     return;
                 }

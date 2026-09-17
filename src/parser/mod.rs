@@ -1,4 +1,5 @@
 pub mod activity;
+mod events;
 pub mod identity;
 pub mod jsonl_reader;
 mod normalize;

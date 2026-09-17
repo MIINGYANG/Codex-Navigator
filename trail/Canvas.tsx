@@ -31,10 +31,19 @@ import {
   type NodeProps,
   type Viewport,
 } from "@xyflow/react";
-import { Circle, GitBranch, Home, Sparkles } from "lucide-react";
 import {
-  CARD_HEIGHT,
-  CARD_WIDTH,
+  Circle,
+  GitBranch,
+  GitCommitHorizontal,
+  Home,
+  Minimize2,
+  Sparkles,
+  Star,
+} from "lucide-react";
+import {
+  DEFAULT_LAYOUT,
+  compactionEdges,
+  layoutMetrics,
   edgePorts,
   highlightedPath,
   initialVisibleIds,
@@ -42,6 +51,8 @@ import {
   layoutGraph,
   neighborhood,
   visibleCanvasCenter,
+  type CanvasLayout,
+  type SessionEvent,
   type Position,
   type QuestionGraph,
   type QuestionNode,
@@ -65,6 +76,11 @@ export interface CanvasProps {
   focusPath: boolean;
   onFocusPathChange(value: boolean): void;
   onZoomChange?(percent: number): void;
+  layout?: CanvasLayout;
+  favoriteOnly?: boolean;
+  events?: SessionEvent[];
+  onToggleFavorite?(node: QuestionNode): void;
+  onEventSelect?(event: SessionEvent): void;
 }
 type CardData = QuestionNode &
   Record<string, unknown> & {
@@ -73,10 +89,19 @@ type CardData = QuestionNode &
     fresh: boolean;
     delay: number;
     ports: string[];
+    compact: boolean;
+    onToggleFavorite?: (node: QuestionNode) => void;
+    onEventSelect?: (event: SessionEvent) => void;
   };
 type CardNode = Node<CardData, "question">;
 type TrailEdge = Edge<
-  { branch: boolean; active: boolean; label: string },
+  {
+    branch: boolean;
+    active: boolean;
+    label: string;
+    events: SessionEvent[];
+    onEventSelect?: (event: SessionEvent) => void;
+  },
   "trail"
 >;
 
@@ -108,7 +133,7 @@ const QuestionCard = memo(function QuestionCard({
         : Circle;
   return (
     <div
-      className={`qt-card${selected ? " is-selected" : ""}${data.fresh ? " is-new" : ""}`}
+      className={`qt-card${selected ? " is-selected" : ""}${data.fresh ? " is-new" : ""}${data.favorite ? " is-favorite" : ""}${data.compact ? " is-compact" : ""}${data.commits?.length ? " has-commits" : ""}`}
       style={{ animationDelay: `${data.delay}ms` }}
       data-question-id={data.id}
     >
@@ -127,6 +152,21 @@ const QuestionCard = memo(function QuestionCard({
           );
         }),
       )}
+      {data.onToggleFavorite && (
+        <button
+          className="qt-card-favorite nodrag nopan"
+          aria-label={`${data.favorite ? "取消收藏" : "收藏"}问题 ${data.ordinal}`}
+          aria-pressed={Boolean(data.favorite)}
+          title={data.favorite ? "取消收藏" : "收藏问题"}
+          onClick={(event) => {
+            event.stopPropagation();
+            data.onToggleFavorite?.(data);
+          }}
+          onDoubleClick={(event) => event.stopPropagation()}
+        >
+          <Star size={15} fill={data.favorite ? "currentColor" : "none"} />
+        </button>
+      )}
       <span
         className={`qt-card-icon${data.isLatest && !data.root ? " is-latest" : ""}`}
       >
@@ -140,16 +180,32 @@ const QuestionCard = memo(function QuestionCard({
           <time dateTime={data.timestamp ?? undefined}>
             {timestamp(data.timestamp)}
           </time>
-          <span>
-            {data.isLatest ? (
-              <>
-                <i />
-                最新
-              </>
-            ) : (
-              `Q${data.ordinal}`
-            )}
-          </span>
+          {data.commits?.length ? (
+            <button
+              className="qt-card-commit nodrag nopan"
+              aria-label={`查看问题 ${data.ordinal} 的 ${data.commits.length} 条提交`}
+              title="查看提交的仓库、分支与版本"
+              onClick={(event) => {
+                event.stopPropagation();
+                data.onEventSelect?.(data.commits![0]);
+              }}
+              onDoubleClick={(event) => event.stopPropagation()}
+            >
+              <GitCommitHorizontal size={12} />
+              {data.commits.length} 提交
+            </button>
+          ) : (
+            <span>
+              {data.isLatest ? (
+                <>
+                  <i />
+                  最新
+                </>
+              ) : (
+                `Q${data.ordinal}`
+              )}
+            </span>
+          )}
         </div>
       </div>
     </div>
@@ -169,7 +225,38 @@ const TrailConnection = memo(function TrailConnection(
         markerEnd={props.markerEnd}
         className={`qt-connection${props.data?.branch ? " is-branch" : " is-sequence"}`}
       />
-      {props.data?.active && (
+      {!!props.data?.events.length && (
+        <EdgeLabelRenderer>
+          <div
+            className="qt-compaction-group nodrag nopan"
+            style={{
+              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+            }}
+          >
+            {props.data.events.map((event) => (
+              <button
+                key={event.id}
+                className="qt-compaction-marker"
+                title={`${event.trigger === "auto" ? "自动压缩" : event.trigger === "manual" ? "手动压缩" : "压缩 · 触发方式未知"} · ${timestamp(event.timestamp)}`}
+                aria-label={`查看${event.trigger === "auto" ? "自动" : event.trigger === "manual" ? "手动" : "未知来源"}压缩详情`}
+                onClick={(click) => {
+                  click.stopPropagation();
+                  props.data?.onEventSelect?.(event);
+                }}
+                onDoubleClick={(click) => click.stopPropagation()}
+              >
+                <Minimize2 size={12} />
+                {event.trigger === "auto"
+                  ? "自动压缩"
+                  : event.trigger === "manual"
+                    ? "手动压缩"
+                    : "压缩 · 未知"}
+              </button>
+            ))}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+      {props.data?.active && !props.data.events.length && (
         <EdgeLabelRenderer>
           <div
             className="qt-edge-label"
@@ -197,12 +284,45 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     focusPath,
     onFocusPathChange,
     onZoomChange,
+    layout = DEFAULT_LAYOUT,
+    favoriteOnly = false,
+    events = [],
+    onToggleFavorite,
+    onEventSelect,
   },
   ref,
 ) {
   const { resolved: theme } = useTheme();
   const flow = useReactFlow<CardNode, TrailEdge>();
+  const favoriteCallback = useRef(onToggleFavorite);
+  const eventCallback = useRef(onEventSelect);
+  favoriteCallback.current = onToggleFavorite;
+  eventCallback.current = onEventSelect;
+  const favoriteEnabled = Boolean(onToggleFavorite);
+  const toggleFavorite = useCallback(
+    (node: QuestionNode) => favoriteCallback.current?.(node),
+    [],
+  );
+  const selectEvent = useCallback(
+    (event: SessionEvent) => eventCallback.current?.(event),
+    [],
+  );
+
   const container = useRef<HTMLDivElement>(null);
+  const [availableWidth, setAvailableWidth] = useState(670);
+  const metrics = layoutMetrics(layout, availableWidth);
+  const layoutKey = `${layout.direction}:${layout.density}:${metrics.columns}`;
+  const layoutRef = useRef("");
+  useLayoutEffect(() => {
+    const element = container.current;
+    if (!element) return;
+    const measure = () =>
+      setAvailableWidth(Math.max(0, element.clientWidth - 48));
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   const focusFrame = useRef<number | undefined>(undefined);
   const initialized = useNodesInitialized();
   const [nodes, setNodes] = useState<CardNode[]>([]);
@@ -243,7 +363,9 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
 
   useEffect(() => {
     const changed = identityRef.current !== identity;
-    if (changed) {
+    const layoutChanged = layoutRef.current !== layoutKey;
+    if (changed || layoutChanged) {
+      layoutRef.current = layoutKey;
       positions.current = new Map();
       identityRef.current = identity;
       fitPending.current = true;
@@ -251,12 +373,13 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       clearHover();
     }
     const prior = positions.current;
-    positions.current = layoutGraph(graph, prior);
+    positions.current = layoutGraph(graph, prior, layout, availableWidth);
     const usedPorts = new Map<string, Set<string>>();
     for (const edge of graphIndex.edges.values()) {
       const ports = edgePorts(
         positions.current.get(edge.source)!,
         positions.current.get(edge.target)!,
+        metrics,
       );
       if (!usedPorts.has(edge.source)) usedPorts.set(edge.source, new Set());
       if (!usedPorts.has(edge.target)) usedPorts.set(edge.target, new Set());
@@ -264,15 +387,23 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       usedPorts.get(edge.target)!.add(`target-${ports.target}`);
     }
     setNodesIdentity(identity);
-    setNodes(
-      graph.nodes.map((node, index) => ({
+    setNodes((current) => {
+      const existing = new Map(current.map((node) => [node.id, node]));
+      return graph.nodes.map((node, index) => ({
         id: node.id,
         type: "question",
         position: positions.current.get(node.id)!,
-        width: CARD_WIDTH,
-        height: CARD_HEIGHT,
+        width: metrics.width,
+        height: metrics.height,
+        measured:
+          changed || layoutChanged
+            ? undefined
+            : existing.get(node.id)?.measured,
         data: {
           ...node,
+          compact: layout.density === "compact",
+          onToggleFavorite: favoriteEnabled ? toggleFavorite : undefined,
+          onEventSelect: selectEvent,
           root: !graphIndex.incoming.has(node.id),
           branching: (graphIndex.outgoing.get(node.id)?.length ?? 0) > 1,
           fresh: !prior.has(node.id),
@@ -282,9 +413,18 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         },
         ariaLabel: `问题 ${node.ordinal}：${node.title}`,
         focusable: true,
-      })),
-    );
-  }, [graph, graphIndex, identity, clearHover]);
+      }));
+    });
+  }, [
+    graph,
+    graphIndex,
+    identity,
+    clearHover,
+    layoutKey,
+    favoriteEnabled,
+    toggleFavorite,
+    selectEvent,
+  ]);
 
   useEffect(() => {
     if (
@@ -295,6 +435,10 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     )
       return;
     fitPending.current = false;
+    if (selectedId) {
+      focusLatest.current(selectedId);
+      return;
+    }
     void flow.fitView({
       nodes: initialVisibleIds(graph).map((id) => ({ id })),
       padding: 0.12,
@@ -302,7 +446,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       maxZoom: 1,
       duration: 0,
     });
-  }, [initialized, nodes.length, nodesIdentity, identity, graph, flow]);
+  }, [initialized, nodes, nodesIdentity, identity, graph, flow, selectedId]);
 
   const fit = useCallback(() => {
     setLocalFocus(false);
@@ -334,7 +478,11 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         const visible = visibleCanvasCenter(canvasRect, drawerRect);
         const bounds = neighbors
           ? flow.getNodesBounds([...neighborhood(graph, id, graphIndex)])
-          : { ...node.position, width: CARD_WIDTH, height: CARD_HEIGHT };
+          : {
+              ...node.position,
+              width: node.width ?? metrics.width,
+              height: node.height ?? metrics.height,
+            };
         if (neighbors) setLocalFocus(true);
         const preferredZoom = neighbors
           ? 1
@@ -414,7 +562,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         cancelAnimationFrame(focusFrame.current);
     };
     // Graph revisions intentionally do not re-center a reader's historical viewport.
-  }, [selectedId, identity]);
+  }, [selectedId, identity, layoutKey]);
   useEffect(
     () => () => {
       if (focusFrame.current !== undefined)
@@ -456,15 +604,21 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         selected: node.id === selectedId,
         style: {
           opacity:
-            focusPath && selectedId && !path.nodes.has(node.id)
-              ? 0.22
-              : (nearby && !nearby.has(node.id)) ||
-                  (edgeEndpoints && !edgeEndpoints.has(node.id))
-                ? 0.55
-                : 1,
+            favoriteOnly && !node.data.favorite && node.id !== selectedId
+              ? 0.2
+              : focusPath && selectedId && !path.nodes.has(node.id)
+                ? 0.22
+                : (nearby && !nearby.has(node.id)) ||
+                    (edgeEndpoints && !edgeEndpoints.has(node.id))
+                  ? 0.55
+                  : 1,
         },
       })),
-    [nodes, selectedId, focusPath, path, nearby, edgeEndpoints],
+    [nodes, selectedId, focusPath, path, nearby, edgeEndpoints, favoriteOnly],
+  );
+  const edgeEvents = useMemo(
+    () => compactionEdges(graph, events),
+    [graph, events],
   );
   const edges = useMemo<TrailEdge[]>(() => {
     return [...graphIndex.edges.values()].map((edge) => {
@@ -475,6 +629,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       const ports = edgePorts(
         positions.current.get(edge.source) ?? { x: 0, y: 0 },
         positions.current.get(edge.target) ?? { x: 0, y: 0 },
+        metrics,
       );
       const stroke = emphasized
         ? "var(--qt-accent-strong)"
@@ -498,6 +653,8 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         focusable: false,
         selectable: false,
         data: {
+          events: edgeEvents.get(edge.id) ?? [],
+          onEventSelect: selectEvent,
           branch: edge.type === "branch",
           active,
           label: `Q${graphIndex.nodes.get(edge.source)?.ordinal} → Q${graphIndex.nodes.get(edge.target)?.ordinal}`,
@@ -514,7 +671,17 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         },
       };
     });
-  }, [graphIndex, nodes, hoverEdge, hovered, path, focusPath, selectedId]);
+  }, [
+    graphIndex,
+    nodes,
+    hoverEdge,
+    hovered,
+    path,
+    focusPath,
+    selectedId,
+    edgeEvents,
+    selectEvent,
+  ]);
   const tooltipNode = tooltip ? graphIndex.nodes.get(tooltip.id) : null;
   const parents = tooltipNode
     ? (graphIndex.incoming.get(tooltipNode.id) ?? [])
@@ -528,7 +695,13 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       ref={container}
       data-testid="question-canvas"
       onKeyDownCapture={(event) => {
-        if (event.key !== "Enter") return;
+        if (
+          event.key !== "Enter" ||
+          (event.target as HTMLElement).closest(
+            "button, input, textarea, select, a",
+          )
+        )
+          return;
         const target = (event.target as HTMLElement).closest<HTMLElement>(
           ".react-flow__node-question",
         );
@@ -560,11 +733,13 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
           positions.current.set(node.id, { ...node.position });
         }}
         onNodeDragStart={clearHover}
-        onNodeClick={(_event, node) => {
+        onNodeClick={(event, node) => {
+          if ((event.target as HTMLElement).closest("button")) return;
           onSelect(node.id);
           focus(node.id);
         }}
-        onNodeDoubleClick={(_event, node) => {
+        onNodeDoubleClick={(event, node) => {
+          if ((event.target as HTMLElement).closest("button")) return;
           onSelect(node.id);
           focus(node.id, true);
         }}
@@ -641,7 +816,11 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
           nodeColor={(node) =>
             node.id === selectedId
               ? "var(--qt-accent)"
-              : "var(--qt-minimap-node)"
+              : node.data.favorite
+                ? "var(--qt-favorite, #c18a18)"
+                : Array.isArray(node.data.commits) && node.data.commits.length
+                  ? "var(--qt-success)"
+                  : "var(--qt-minimap-node)"
           }
           maskColor="var(--qt-minimap-mask)"
           nodeStrokeWidth={0}

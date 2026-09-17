@@ -1578,3 +1578,295 @@ fn web_management_rejects_external_paths_codex_path_mismatch_and_failed_trash() 
     assert_eq!(server.key(id), key);
     assert_eq!(server.loaded(&key, 1)["meta"]["id"], id);
 }
+
+#[test]
+fn favorites_persist_stable_session_and_question_identity() {
+    let root = TempDir::new().unwrap();
+    let source = fixture(
+        root.path(),
+        "favorites-a",
+        &[
+            meta("favorites-a"),
+            user("First stable question"),
+            user("Second stable question"),
+        ],
+    );
+    let original = fs::read(&source).unwrap();
+    let server = Server::start(root, &["--no-watch"]);
+    let key = server.key("favorites-a");
+    let graph_path = format!("/api/trail/session/{key}");
+    let graph = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["nodes"].as_array().is_some_and(|v| v.len() == 2)
+    });
+    let endpoint = format!("/api/session/{key}/favorite");
+    assert_eq!(
+        server.post(&endpoint, &json!({"favorite":true})).json()["favorite"],
+        true
+    );
+    assert_eq!(
+        server
+            .post(
+                &endpoint,
+                &json!({"favorite":true,"node_id":"q2","generation":graph["generation"]})
+            )
+            .status,
+        200
+    );
+    assert_eq!(
+        server
+            .post(&endpoint, &json!({"favorite":true,"node_id":"q2"}))
+            .status,
+        400
+    );
+    assert_eq!(
+        server
+            .post(
+                &endpoint,
+                &json!({"favorite":false,"node_id":"q2","generation":0})
+            )
+            .status,
+        409
+    );
+    let current = server.get(&graph_path).json();
+    assert_eq!(current["favorite"], true);
+    assert_eq!(current["nodes"][0]["favorite"], false);
+    assert_eq!(current["nodes"][1]["favorite"], true);
+    assert_eq!(server.sessions()["sessions"][0]["favorite"], true);
+    assert_eq!(fs::read(&source).unwrap(), original);
+    // A new candidate changes the ephemeral sN registry; saved identity must survive.
+    fixture(
+        server.root.path(),
+        "newer",
+        &[meta("newer"), user("Different session")],
+    );
+    let server = server.restart(&["--no-watch"]);
+    let key = server.key("favorites-a");
+    let current = server.wait(&format!("/api/trail/session/{key}"), |v| {
+        v["loading"] == false
+    });
+    assert_eq!(current["favorite"], true);
+    assert_eq!(current["nodes"][1]["favorite"], true);
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/favorite"),
+                &json!({"favorite":false,"node_id":"q2","generation":current["generation"]})
+            )
+            .status,
+        200
+    );
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["nodes"][1]["favorite"],
+        false
+    );
+    assert_eq!(fs::read(&source).unwrap(), original);
+}
+
+#[test]
+fn favorites_require_authenticated_origin_and_preserve_corrupt_store() {
+    let root = TempDir::new().unwrap();
+    fixture(
+        root.path(),
+        "favorites-security",
+        &[meta("favorites-security"), user("Question")],
+    );
+    let server = Server::start(root, &[]);
+    let key = server.key("favorites-security");
+    let endpoint = format!("/api/session/{key}/favorite");
+    assert_eq!(
+        server
+            .request_body(
+                "POST",
+                &endpoint,
+                &[("Content-Type", "application/json")],
+                Some("{\"favorite\":true}")
+            )
+            .status,
+        403
+    );
+    assert_eq!(
+        server
+            .request_body(
+                "POST",
+                &endpoint,
+                &[
+                    ("X-Codex-Nav-Token", &server.token),
+                    ("Content-Type", "application/json")
+                ],
+                Some("{\"favorite\":true}")
+            )
+            .status,
+        403
+    );
+    assert_eq!(
+        server.post(&endpoint, &json!({"favorite":"true"})).status,
+        400
+    );
+    assert_eq!(
+        server
+            .post(&endpoint, &json!({"favorite":true,"other":1}))
+            .status,
+        400
+    );
+    assert_eq!(
+        server
+            .post("/api/session/unknown/favorite", &json!({"favorite":true}))
+            .status,
+        404
+    );
+    let store = server.root.path().join("data/codex-nav/favorites.json");
+    fs::create_dir_all(store.parent().unwrap()).unwrap();
+    fs::write(&store, b"invalid JSON").unwrap();
+    assert!(server.sessions()["favorites_error"]
+        .as_str()
+        .unwrap()
+        .contains("损坏"));
+    assert!(
+        server.get(&format!("/api/trail/session/{key}")).json()["favorites_error"]
+            .as_str()
+            .unwrap()
+            .contains("损坏")
+    );
+    assert_eq!(
+        server.post(&endpoint, &json!({"favorite":true})).status,
+        409
+    );
+    assert_eq!(fs::read(store).unwrap(), b"invalid JSON");
+}
+
+#[cfg(unix)]
+#[test]
+fn favorites_are_shared_between_ports_without_browser_storage() {
+    let first_root = TempDir::new().unwrap();
+    fixture(
+        first_root.path(),
+        "shared-favorite",
+        &[meta("shared-favorite"), user("Shared")],
+    );
+    let first = Server::start(first_root, &[]);
+    let first_key = first.key("shared-favorite");
+    assert_eq!(
+        first
+            .post(
+                &format!("/api/session/{first_key}/favorite"),
+                &json!({"favorite":true})
+            )
+            .status,
+        200
+    );
+    let second_root = TempDir::new().unwrap();
+    std::os::unix::fs::symlink(
+        first.root.path().join("codex"),
+        second_root.path().join("codex"),
+    )
+    .unwrap();
+    std::os::unix::fs::symlink(
+        first.root.path().join("data"),
+        second_root.path().join("data"),
+    )
+    .unwrap();
+    let second = Server::start(second_root, &[]);
+    let second_key = second.key("shared-favorite");
+    assert_ne!(first.address, second.address);
+    assert_eq!(second.sessions()["sessions"][0]["favorite"], true);
+    assert_eq!(
+        second
+            .post(
+                &format!("/api/session/{second_key}/favorite"),
+                &json!({"favorite":false})
+            )
+            .status,
+        200
+    );
+    assert_eq!(first.sessions()["sessions"][0]["favorite"], false);
+}
+
+#[test]
+fn web_events_reach_graph_and_list_and_reset_without_stale_badges() {
+    let root = TempDir::new().unwrap();
+    let source = fixture(
+        root.path(),
+        "events",
+        &[
+            meta("events"),
+            user("Implement synthetic change"),
+            json!({"type":"response_item","payload":{"type":"function_call","name":"exec_command","call_id":"git1","arguments":{"cmd":"git commit -m 'change'","workdir":"/synthetic/repo"}}}),
+            json!({"timestamp":"2026-09-17T10:01:00Z","type":"response_item","payload":{"type":"function_call_output","call_id":"git1","output":{"exit_code":0,"output":"[feature/test abc1234] change"}}}),
+            json!({"timestamp":"2026-09-17T10:02:00Z","type":"compacted","payload":{"trigger":"auto","replacement_history":[{"text":"DO NOT EXPOSE"}]}}),
+        ],
+    );
+    let server = Server::start(root, &[]);
+    let key = server.key("events");
+    let graph_path = format!("/api/trail/session/{key}");
+    let graph = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["events"].as_array().is_some_and(|v| v.len() == 2)
+    });
+    assert_eq!(graph["events"][0]["repository"], "/synthetic/repo");
+    assert_eq!(graph["events"][0]["branch"], "feature/test");
+    assert_eq!(graph["events"][1]["trigger"], "auto");
+    assert_eq!(graph["nodes"][0]["commits"][0]["hash"], "abc1234");
+    assert!(!graph.to_string().contains("DO NOT EXPOSE"));
+    let listing = server.wait("/api/sessions", |v| {
+        v["sessions"][0]["events_loading"] == false
+    });
+    assert_eq!(listing["sessions"][0]["commit_count"], 1);
+    assert_eq!(listing["sessions"][0]["compaction_count"], 1);
+    assert_eq!(listing["sessions"][0]["last_commit"]["hash"], "abc1234");
+    let replacement = source.with_extension("replacement");
+    fs::write(&replacement, lines(&[meta("events"), user("New history")])).unwrap();
+    fs::rename(&replacement, &source).unwrap();
+    let reset = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["generation"] != graph["generation"]
+    });
+    assert!(reset["events"].as_array().unwrap().is_empty());
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/favorite"),
+                &json!({"favorite":true,"node_id":"q1","generation":graph["generation"]})
+            )
+            .status,
+        409
+    );
+    let listing = server.wait("/api/sessions", |v| v["sessions"][0]["commit_count"] == 0);
+    assert_eq!(listing["sessions"][0]["compaction_count"], 0);
+    assert!(listing["sessions"][0]["last_commit"].is_null());
+}
+
+#[test]
+fn explicit_external_session_can_be_favorited_without_source_writes() {
+    let root = TempDir::new().unwrap();
+    let external = root.path().join("external.jsonl");
+    let original = lines(&[meta("external-favorite"), user("External question")]);
+    fs::write(&external, &original).unwrap();
+    let server = Server::start(root, &["--session", external.to_str().unwrap()]);
+    let key = server.get("/api/info").json()["initial_session"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+        v["loading"] == false
+    });
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/favorite"),
+                &json!({"favorite":true})
+            )
+            .status,
+        200
+    );
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/favorite"),
+                &json!({"favorite":true,"node_id":"q1","generation":graph["generation"]})
+            )
+            .status,
+        200
+    );
+    assert_eq!(fs::read_to_string(external).unwrap(), original);
+    let graph = server.get(&format!("/api/trail/session/{key}")).json();
+    assert_eq!(graph["favorite"], true);
+    assert_eq!(graph["nodes"][0]["favorite"], true);
+}

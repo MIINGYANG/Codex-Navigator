@@ -96,3 +96,10 @@ codex-nav --web    # 网页版，自动打开浏览器
 浏览和 doctor 保持只读；用户在网页主动改名/确认删除时才写入。改名需要 PATH 中的 Codex CLI，使用官方 app-server 元数据接口，会更新 CODEX_HOME 名称索引/数据库，也可能初始化 Codex 状态文件；不请求模型或恢复对话。删除当前仅支持 Linux `gio trash`，只移动选定 rollout，不永久删除或清理 Codex 数据库，恢复后需重启 Navigator。
 
 安装指令不授权拿真实会话做改名/删除验收。管理测试必须隔离 CODEX_HOME、XDG_CONFIG_HOME、XDG_DATA_HOME，只创建合成会话；浏览器确认名称、cwd、取消无变化、成功和错误反馈，再核对 Codex 读回和回收站源字节。不要调用 `codex delete`、`thread/delete` 或永久删除命令。
+
+
+## 画布收藏与事件验收（3.1.0）
+
+新功能保留原问题画布，增加方向 / 密度切换、会话和问题收藏、代码提交与上下文压缩事件。收藏只写 `$XDG_DATA_HOME/codex-nav/favorites.json`（默认 `~/.local/share/codex-nav/favorites.json`），安装验收仍须隔离该目录，不能用真实会话试写收藏。可运行 `node scripts/features_qa.mjs`，使用合成数据验证重启 / 换端口持久化、桌面和窄屏布局及事件详情。排列偏好属于浏览器当前地址，换端口不保证保留。
+
+提交和压缩只依据记录中的证据。工作路径不一定是 Git 根目录，旧压缩记录可能不含触发方式，缺少版本标签时显示哈希；不能为了补齐字段而运行历史命令或改写 Codex 源记录。

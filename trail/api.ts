@@ -59,6 +59,31 @@ export async function manageSession<T>(
   return result as T;
 }
 
+export async function saveFavorite(
+  key: string,
+  favorite: boolean,
+  question?: { node_id: string; generation: number },
+): Promise<{ favorite: boolean; node_id?: string; generation?: number }> {
+  const response = await fetch(
+    `/api/session/${encodeURIComponent(key)}/favorite`,
+    {
+      method: "POST",
+      headers: {
+        "X-Codex-Nav-Token": token,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ favorite, ...question }),
+      cache: "no-store",
+    },
+  );
+  const result = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new Error(
+      result?.error || `收藏保存失败（${response.status}），请稍后重试。`,
+    );
+  return result;
+}
+
 // Fetch-based SSE keeps the secret in a header, never the URL or server access log.
 export async function subscribe(
   key: string,

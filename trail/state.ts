@@ -1,3 +1,5 @@
+import type { CanvasLayout, SessionEvent } from "./graph";
+
 export type SessionSummary = {
   key: string;
   id: string;
@@ -6,7 +8,46 @@ export type SessionSummary = {
   updated_at: string | null;
   turn_count: number | null;
   first_prompt: string | null;
+  favorite?: boolean;
+  events_loading?: boolean;
+  commit_count?: number | null;
+  compaction_count?: number | null;
+  last_commit?: SessionEvent | null;
 };
+
+export function canvasPreferences(value: unknown): CanvasLayout {
+  const saved =
+    value && typeof value === "object"
+      ? (value as Record<string, unknown>)
+      : {};
+  return {
+    direction: saved.direction === "horizontal" ? "horizontal" : "vertical",
+    density: saved.density === "compact" ? "compact" : "comfortable",
+  };
+}
+
+export function filterSessions(
+  sessions: SessionSummary[],
+  query: string,
+  filter: "all" | "favorites" | "commits",
+  favoriteFirst: boolean,
+) {
+  const term = query.trim().toLocaleLowerCase();
+  return sessions
+    .filter(
+      (session) =>
+        (filter !== "favorites" || session.favorite) &&
+        (filter !== "commits" || (session.commit_count ?? 0) > 0) &&
+        `${titleOf(session)} ${session.cwd || ""} ${session.last_commit?.repository || ""} ${session.last_commit?.branch || ""}`
+          .toLocaleLowerCase()
+          .includes(term),
+    )
+    .sort((a, b) =>
+      favoriteFirst
+        ? Number(Boolean(b.favorite)) - Number(Boolean(a.favorite))
+        : 0,
+    );
+}
 export type SearchResult = {
   sessionKey: string;
   sessionTitle: string;

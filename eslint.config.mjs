@@ -4,6 +4,7 @@ export default [
       "trail/public/**/*.js",
       "scripts/trail_qa.mjs",
       "scripts/management_qa.mjs",
+      "scripts/features_qa.mjs",
     ],
     languageOptions: {
       ecmaVersion: "latest",

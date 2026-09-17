@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  canvasPreferences,
+  filterSessions,
   titleOf,
   relativeTime,
   fullTime,
@@ -101,4 +103,62 @@ test("实时追加保留历史选择，文件代际变化或节点消失清除�
   assert.equal(reconcileSelection("q1", ids, 1, 2), null);
   assert.equal(reconcileSelection("q4", ids, 1, 1), null);
   assert.equal(reconcileSelection(null, ids, undefined, 1), null);
+});
+
+test("排列偏好只接受合法值，损坏或旧存储回退原布局", () => {
+  for (const value of [
+    null,
+    false,
+    [],
+    "horizontal",
+    { direction: "diagonal" },
+  ]) {
+    assert.deepEqual(canvasPreferences(value), {
+      direction: "vertical",
+      density: "comfortable",
+    });
+  }
+  assert.deepEqual(
+    canvasPreferences({ direction: "horizontal", density: "compact" }),
+    { direction: "horizontal", density: "compact" },
+  );
+});
+
+test("会话筛选按收藏及可靠提交计数工作，收藏优先保持组内顺序且不改源列表", () => {
+  const sessions = [
+    { key: "a", title: "第一条", commit_count: null },
+    {
+      key: "b",
+      title: "第二条",
+      favorite: true,
+      commit_count: 1,
+      last_commit: { repository: "/work/demo", branch: "feature/layout" },
+    },
+    { key: "c", title: "第三条", favorite: true, commit_count: 0 },
+    { key: "d", title: "第四条", commit_count: 2 },
+  ];
+  assert.deepEqual(
+    filterSessions(sessions, "", "all", true).map((s) => s.key),
+    ["b", "c", "a", "d"],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, "", "favorites", false).map((s) => s.key),
+    ["b", "c"],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, "", "commits", false).map((s) => s.key),
+    ["b", "d"],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, "feature/layout", "all", false).map((s) => s.key),
+    ["b"],
+  );
+  assert.deepEqual(
+    filterSessions(sessions, "/work/demo", "all", false).map((s) => s.key),
+    ["b"],
+  );
+  assert.deepEqual(
+    sessions.map((s) => s.key),
+    ["a", "b", "c", "d"],
+  );
 });

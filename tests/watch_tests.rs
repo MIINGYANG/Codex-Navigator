@@ -40,12 +40,14 @@ fn apply(app: &mut App, update: Update) -> bool {
             stats,
             revision,
             turns,
+            events,
             reset,
             offset,
             total,
         } => {
             assert!(offset <= total);
             app.apply_update(meta, stats, revision, turns, reset);
+            app.update_events(events);
             app.loading = offset < total;
             app.progress = Some((offset, total));
             reset
@@ -331,4 +333,29 @@ fn watch_worker_reports_missing_source_and_shuts_down_without_blocking() {
     let start = Instant::now();
     drop(worker);
     assert!(start.elapsed() < Duration::from_secs(1));
+}
+
+#[test]
+fn watch_event_only_append_and_reset_propagate_without_new_question() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("events.jsonl");
+    fs::write(&path, prompt("initial question")).unwrap();
+    let (worker, mut app) = start(&path, Config::default());
+    append(
+        &path,
+        format!("{}\n", json!({"type":"compacted","payload":{}})).as_bytes(),
+    );
+    wait_until(&worker, &mut app, |app| {
+        app.session.as_ref().is_some_and(|s| s.events.len() == 1)
+    });
+    assert_eq!(turn_count(&app), 1);
+    assert_eq!(app.new_turns, 0);
+    assert_eq!(app.selected, Some(0));
+    fs::write(&path, prompt("new")).unwrap();
+    wait_until(&worker, &mut app, |app| {
+        app.session
+            .as_ref()
+            .is_some_and(|s| s.turns[0].prompt.text == "new")
+    });
+    assert!(app.session.as_ref().unwrap().events.is_empty());
 }

@@ -63,16 +63,66 @@ pub struct ParseStats {
 pub struct Session {
     pub meta: SessionMeta,
     pub turns: Vec<Turn>,
+    pub events: Vec<SessionEvent>,
     pub parse_stats: ParseStats,
     pub revision: u64,
 }
 
 impl Session {
+    pub fn visible_events(&self) -> impl Iterator<Item = &SessionEvent> {
+        self.events.iter().filter(|event| {
+            event.turn_index.is_none_or(|index| {
+                self.turns
+                    .get(index)
+                    .is_some_and(|turn| turn.status != TurnStatus::RolledBack)
+            })
+        })
+    }
+
+    pub fn event_summary(&self) -> SessionEventSummary {
+        let mut summary = SessionEventSummary::default();
+        for event in self.visible_events() {
+            match event.kind.as_str() {
+                "commit" => {
+                    summary.commit_count += 1;
+                    summary.last_commit = Some(event.clone());
+                }
+                "compaction" => summary.compaction_count += 1,
+                _ => {}
+            }
+        }
+        summary
+    }
+
     pub fn latest_active(&self) -> Option<usize> {
         self.turns
             .iter()
             .rposition(|t| t.status != TurnStatus::RolledBack)
     }
+}
+
+/// Observed persisted evidence only; missing metadata is never inferred from prose.
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct SessionEvent {
+    pub id: String,
+    pub kind: String,
+    pub turn_index: Option<usize>,
+    pub timestamp: Option<String>,
+    pub source: String,
+    pub hash: Option<String>,
+    /// Working directory explicitly associated with the successful Git command.
+    pub repository: Option<String>,
+    pub branch: Option<String>,
+    pub version: Option<String>,
+    pub summary: Option<String>,
+    pub trigger: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct SessionEventSummary {
+    pub commit_count: usize,
+    pub compaction_count: usize,
+    pub last_commit: Option<SessionEvent>,
 }
 
 #[derive(Clone, Debug, Default)]

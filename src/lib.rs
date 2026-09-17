@@ -3,6 +3,7 @@ pub mod cli;
 pub mod config;
 pub mod discovery;
 pub mod domain;
+mod favorites;
 pub mod index;
 mod management;
 pub mod parser;

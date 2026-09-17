@@ -425,12 +425,10 @@ try {
       "(()=>{getSelection().removeAllRanges();return true})()",
     );
 
-    assert.ok(
-      await evaluate(
-        target,
-        "document.querySelectorAll('.qt-connection.is-branch').length===4",
-      ),
-      "真实持久化分支",
+    await wait(
+      target,
+      "document.querySelectorAll('.qt-connection.is-branch').length===4",
+      "节点测量完成后显示真实持久化分支",
     );
     await click(target, '[data-question-id="q2"]');
     await wait(target, selected(2), "点击 Q2 更新详情");

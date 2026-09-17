@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   CARD_HEIGHT,
   CARD_WIDTH,
+  compactionEdges,
+  layoutMetrics,
   edgePorts,
   highlightedPath,
   initialVisibleIds,
@@ -349,4 +351,149 @@ test("incremental snake append matches fresh layout and persisted branches never
   const next = layoutGraph(graph, existing);
   for (const [id, point] of existing) assert.deepEqual(next.get(id), point);
   noOverlap(next);
+});
+
+test("横向排列依据有效画布宽度取两到四列，紧凑密度独立减少空白", () => {
+  const comfortable = { direction: "horizontal", density: "comfortable" };
+  const compact = { direction: "horizontal", density: "compact" };
+  assert.equal(layoutMetrics(comfortable, 390).columns, 2);
+  assert.equal(layoutMetrics(comfortable, 1060).columns, 3);
+  assert.equal(layoutMetrics(comfortable, 1600).columns, 4);
+  assert.equal(layoutMetrics(comfortable, 5000).columns, 4);
+  assert.equal(
+    layoutMetrics({ ...compact, direction: "vertical" }, 1600).columns,
+    2,
+  );
+  const graph = fixture(12);
+  const loose = layoutGraph(graph, new Map(), comfortable, 1600);
+  const dense = layoutGraph(graph, new Map(), compact, 1600);
+  assert.ok(dense.get("q9").y < loose.get("q9").y);
+  assert.ok(dense.get("q4").x < loose.get("q4").x);
+});
+
+test("两至四列蛇形遵循原顺序，转折边不穿过卡片", () => {
+  for (const density of ["comfortable", "compact"]) {
+    for (const availableWidth of [600, 1060, 1600]) {
+      const layout = { direction: "horizontal", density };
+      const metrics = layoutMetrics(layout, availableWidth);
+      const graph = fixture(24);
+      const before = JSON.stringify(graph);
+      const positions = layoutGraph(graph, new Map(), layout, availableWidth);
+      for (const edge of graph.edges) {
+        const source = positions.get(edge.source);
+        const target = positions.get(edge.target);
+        const ports = edgePorts(source, target, metrics);
+        if (source.y === target.y) {
+          assert.equal(
+            Math.abs(target.x - source.x),
+            metrics.width + metrics.gapX,
+          );
+          assert.equal(ports.source, target.x > source.x ? "right" : "left");
+        } else {
+          assert.equal(source.x, target.x);
+          assert.equal(target.y - source.y, metrics.height + metrics.gapY);
+          assert.deepEqual(ports, { source: "bottom", target: "top" });
+        }
+      }
+      assert.equal(JSON.stringify(graph), before);
+    }
+  }
+});
+
+test("真实分支使用横向层级，布局与密度切换不创造关系", () => {
+  const graph = fixture(6);
+  graph.edges[1] = { id: "fork", source: "q1", target: "q3", type: "branch" };
+  const before = JSON.stringify(graph.edges);
+  const positions = layoutGraph(
+    graph,
+    new Map(),
+    { direction: "horizontal", density: "compact" },
+    1200,
+  );
+  assert.ok(positions.get("q2").x > positions.get("q1").x);
+  assert.ok(positions.get("q3").x > positions.get("q1").x);
+  assert.notEqual(positions.get("q2").y, positions.get("q3").y);
+  assert.ok(positions.get("q2").y < positions.get("q3").y);
+  assert.deepEqual(
+    edgePorts(
+      positions.get("q1"),
+      positions.get("q3"),
+      layoutMetrics({ direction: "horizontal", density: "compact" }, 1200),
+    ),
+    { source: "right", target: "left" },
+  );
+  assert.equal(JSON.stringify(graph.edges), before);
+});
+
+test("紧凑横向布局追加及收藏变化保留已有拖拽坐标", () => {
+  const options = { direction: "horizontal", density: "compact" };
+  const previous = layoutGraph(fixture(8), new Map(), options, 1200);
+  previous.set("q4", { x: -123, y: 777 });
+  const graph = fixture(12);
+  graph.nodes[3].favorite = true;
+  const current = layoutGraph(graph, previous, options, 1200);
+  for (const [id, point] of previous) assert.deepEqual(current.get(id), point);
+  assert.equal(current.size, 12);
+});
+
+test("压缩事件只落在记录轮次之后的唯一真实主线边，多次压缩不丢失", () => {
+  const graph = fixture(4);
+  const event = {
+    id: "c1",
+    kind: "compaction",
+    turn_index: 1,
+    timestamp: null,
+    source: "compacted",
+    trigger: "unknown",
+  };
+  const events = [
+    event,
+    { ...event, id: "c2", trigger: "manual" },
+    { ...event, id: "commit", kind: "commit" },
+  ];
+  const result = compactionEdges(graph, events);
+  assert.deepEqual([...result.keys()], ["e2"]);
+  assert.deepEqual(
+    result.get("e2").map((item) => item.id),
+    ["c1", "c2"],
+  );
+  assert.equal(result.get("e2")[0].trigger, "unknown");
+});
+
+test("无轮次、末尾压缩、缺边与多主线歧义不虚构压缩定位", () => {
+  const graph = fixture(4);
+  const event = {
+    id: "c1",
+    kind: "compaction",
+    turn_index: null,
+    timestamp: null,
+    source: "compacted",
+  };
+  assert.equal(compactionEdges(graph, [event]).size, 0);
+  assert.equal(compactionEdges(graph, [{ ...event, turn_index: 3 }]).size, 0);
+  graph.edges = graph.edges.filter((edge) => edge.source !== "q2");
+  assert.equal(compactionEdges(graph, [{ ...event, turn_index: 1 }]).size, 0);
+  graph.edges.push(
+    { id: "a", source: "q2", target: "q3", type: "sequence" },
+    { id: "b", source: "q2", target: "q4", type: "sequence" },
+  );
+  assert.equal(compactionEdges(graph, [{ ...event, turn_index: 1 }]).size, 0);
+});
+
+test("大规模横向分支也沿正确方向前进且不递归溢出", () => {
+  const graph = fixture(1000);
+  graph.edges.push({
+    id: "fork",
+    source: "q1",
+    target: "q1000",
+    type: "branch",
+  });
+  const positions = layoutGraph(
+    graph,
+    new Map(),
+    { direction: "horizontal", density: "compact" },
+    1400,
+  );
+  assert.equal(positions.size, 1000);
+  assert.ok(positions.get("q900").x > positions.get("q800").x);
 });

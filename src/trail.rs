@@ -1,5 +1,10 @@
 //! Deterministic question structure and bounded, prompt-only global search.
-use crate::{config::Config, domain::Session, parser::Tail, util::preview};
+use crate::{
+    config::Config,
+    domain::{Session, SessionEventSummary},
+    parser::Tail,
+    util::preview,
+};
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, sync::mpsc, thread};
 
@@ -32,6 +37,15 @@ pub(super) fn graph(session: &Session) -> (Vec<Value>, Vec<Value>, Vec<String>) 
     let mut nodes = Vec::new();
     let mut notices = Vec::new();
     let latest = session.latest_active();
+    let mut commits: HashMap<usize, Vec<_>> = HashMap::new();
+    for event in session
+        .visible_events()
+        .filter(|event| event.kind == "commit")
+    {
+        if let Some(index) = event.turn_index {
+            commits.entry(index).or_default().push(event);
+        }
+    }
     if session.meta.identity.has_fork_lineage {
         notices.push(
             "此会话记录了跨会话 fork 来源，但没有可验证的父问题锚点；不会推测跨会话连线。".into(),
@@ -56,7 +70,7 @@ pub(super) fn graph(session: &Session) -> (Vec<Value>, Vec<Value>, Vec<String>) 
         } else {
             &turn.prompt.text
         };
-        nodes.push(json!({"id":id,"turnIndex":index,"ordinal":turn.ordinal,"title":title(prompt),"promptPreview":preview(prompt,320),"timestamp":turn.started_at.map(|t|t.to_rfc3339()),"parentId":parent.map(node_id),"isLatest":Some(index)==latest}));
+        nodes.push(json!({"id":id,"turnIndex":index,"ordinal":turn.ordinal,"title":title(prompt),"promptPreview":preview(prompt,320),"timestamp":turn.started_at.map(|t|t.to_rfc3339()),"parentId":parent.map(node_id),"isLatest":Some(index)==latest,"commits":commits.get(&index).cloned().unwrap_or_default()}));
         if let Some(parent) = parent {
             edges.push(json!({"id":format!("{}-{id}",node_id(parent)),"source":node_id(parent),"target":id,"type":if parent + 1 == index {"sequence"}else{"branch"}}));
         }
@@ -81,6 +95,7 @@ pub(super) struct SearchRow {
 pub(super) struct SearchSnapshot {
     pub rows: Vec<SearchRow>,
     pub counts: HashMap<String, usize>,
+    pub event_summaries: HashMap<String, SessionEventSummary>,
     pub truncated: bool,
 }
 
@@ -123,6 +138,9 @@ pub(super) fn start_index(
             let projected = project(session, &key, &mut retained, &mut rows);
             snapshot.rows = projected.rows;
             snapshot.counts = projected.counts;
+            if !snapshot.truncated && tail.reader.byte_offset >= size {
+                snapshot.event_summaries = projected.event_summaries;
+            }
             snapshot.truncated |= projected.truncated;
             let stop = projected.truncated || rows >= 100_000;
             snapshot.truncated |= stop;
@@ -147,6 +165,9 @@ pub(super) fn project(
 ) -> SearchSnapshot {
     let mut snapshot = SearchSnapshot::default();
     snapshot.counts.insert(key.to_owned(), session.turns.len());
+    snapshot
+        .event_summaries
+        .insert(key.to_owned(), session.event_summary());
     let session_title = session
         .turns
         .iter()
@@ -287,6 +308,42 @@ mod tests {
         assert_eq!(
             title("\r\nFirst paragraph\r\n  \r\nSecond paragraph"),
             "First paragraph"
+        );
+    }
+
+    #[test]
+    fn events_project_to_nodes_and_summary_without_changing_graph() {
+        use crate::domain::{SessionEvent, TurnStatus};
+        let mut s = session(&[None, None]);
+        s.events = vec![
+            SessionEvent {
+                id: "commit:a".into(),
+                kind: "commit".into(),
+                turn_index: Some(0),
+                hash: Some("abc1234".into()),
+                ..SessionEvent::default()
+            },
+            SessionEvent {
+                id: "compaction:b".into(),
+                kind: "compaction".into(),
+                turn_index: Some(1),
+                trigger: Some("unknown".into()),
+                ..SessionEvent::default()
+            },
+        ];
+        let (nodes, edges, _) = graph(&s);
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(edges.len(), 1);
+        assert_eq!(nodes[0]["commits"][0]["hash"], "abc1234");
+        assert_eq!(nodes[1]["commits"], json!([]));
+        let snapshot = project(&s, "s1", &mut 0, &mut 0);
+        assert_eq!(snapshot.event_summaries["s1"].commit_count, 1);
+        assert_eq!(snapshot.event_summaries["s1"].compaction_count, 1);
+        s.turns[0].status = TurnStatus::RolledBack;
+        assert_eq!(graph(&s).0[0]["commits"], json!([]));
+        assert_eq!(
+            project(&s, "s1", &mut 0, &mut 0).event_summaries["s1"].commit_count,
+            0
         );
     }
 }

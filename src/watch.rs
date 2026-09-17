@@ -1,7 +1,7 @@
 //! Background tail with bounded delivery and a filesystem hint plus polling fallback.
 use crate::{
     config::Config,
-    domain::{ParseStats, SessionMeta, Turn},
+    domain::{ParseStats, SessionEvent, SessionMeta, Turn},
     parser::Tail,
 };
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -16,12 +16,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+// The bounded channel holds two batches; Vec bodies already live on the heap.
+// Keep the small metadata inline rather than add a per-update allocation.
+#[allow(clippy::large_enum_variant)]
 pub enum Update {
     Batch {
         meta: SessionMeta,
         stats: ParseStats,
         revision: u64,
         turns: Vec<(usize, Turn)>,
+        events: Vec<SessionEvent>,
         reset: bool,
         offset: u64,
         total: u64,
@@ -175,6 +179,7 @@ fn run(
                 meta: tail.session().meta.clone(),
                 stats: tail.session().parse_stats.clone(),
                 revision: tail.session().revision,
+                events: tail.session().events.clone(),
                 turns: tail
                     .parser
                     .dirty

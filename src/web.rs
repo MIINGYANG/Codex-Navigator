@@ -4,6 +4,7 @@ use crate::{
     config::Config,
     discovery,
     domain::{Session, SessionSummary, Turn, TurnItem, TurnStatus},
+    favorites,
     index::SearchIndex,
     management,
     watch::{SessionWorker, Update},
@@ -41,6 +42,8 @@ use tokio::{
 mod trail;
 
 const MAX_OPEN: usize = 2;
+const MAX_API_REQUESTS: usize = 4;
+const MAX_EVENT_CONNECTIONS: usize = 8;
 const MAX_SESSIONS: usize = 20_000;
 const CSP: &str = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'";
 
@@ -65,6 +68,12 @@ struct ApiRequest {
     query: HashMap<String, String>,
     reply: oneshot::Sender<ApiReply>,
     mutation: Option<Value>,
+}
+
+fn request_channel() -> (mpsc::SyncSender<ApiRequest>, mpsc::Receiver<ApiRequest>) {
+    // Both admission classes enqueue one state request at a time. Reserve space
+    // for every admitted API request even when all SSE polls arrive together.
+    mpsc::sync_channel(MAX_API_REQUESTS + MAX_EVENT_CONNECTIONS)
 }
 
 struct ApiReply {
@@ -162,7 +171,7 @@ fn run_inner(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -
             .context("Cannot bind local Web port; use --port to select another port")?;
         let authority = listener.local_addr()?.to_string();
         let url = format!("http://{authority}/#token={token}");
-        let (sender, receiver) = mpsc::sync_channel(4);
+        let (sender, receiver) = request_channel();
         let stopped = Arc::new(AtomicBool::new(false));
         let worker_stop = stopped.clone();
         let worker = thread::Builder::new()
@@ -191,8 +200,8 @@ fn run_inner(home: PathBuf, cwd: PathBuf, config: Config, options: WebOptions) -
             authority,
             token,
             sender,
-            capacity: Arc::new(Semaphore::new(4)),
-            events_capacity: Arc::new(Semaphore::new(8)),
+            capacity: Arc::new(Semaphore::new(MAX_API_REQUESTS)),
+            events_capacity: Arc::new(Semaphore::new(MAX_EVENT_CONNECTIONS)),
         };
         let router = Router::new().fallback(handle).with_state(state);
         println!(
@@ -476,7 +485,7 @@ fn management_target(path: &str) -> Option<(&str, &str)> {
     if key.is_empty()
         || key.len() > 64
         || !key.bytes().all(|v| v.is_ascii_alphanumeric())
-        || !matches!(action, "rename" | "trash")
+        || !matches!(action, "rename" | "trash" | "favorite")
     {
         return None;
     }
@@ -633,6 +642,7 @@ impl OpenSession {
             Update::Error(error) => self.error = Some(error),
             Update::Batch {
                 meta,
+                events,
                 stats,
                 revision,
                 turns,
@@ -652,6 +662,7 @@ impl OpenSession {
                 self.offset = offset;
                 self.total = total;
                 self.session.meta = meta;
+                self.session.events = events;
                 self.session.parse_stats = stats;
                 self.session.revision = revision;
                 for (i, turn) in turns {
@@ -749,6 +760,9 @@ impl Backend {
             self.search
                 .counts
                 .retain(|key, _| signature.contains_key(key));
+            self.search
+                .event_summaries
+                .retain(|key, _| signature.contains_key(key));
             self.search_signature = signature;
             paths.retain(|(key, _)| {
                 let deferred = reusable.contains(key)
@@ -770,6 +784,9 @@ impl Backend {
             });
             let changed: std::collections::HashSet<_> =
                 paths.iter().map(|(key, _)| key.clone()).collect();
+            self.search
+                .event_summaries
+                .retain(|key, _| !changed.contains(key));
             let unchanged = self
                 .search
                 .rows
@@ -792,6 +809,7 @@ impl Backend {
                     self.search.rows.retain(|row| row.key != *key);
                     self.search.rows.extend(snapshot.rows);
                     self.search.counts.extend(snapshot.counts);
+                    self.search.event_summaries.extend(snapshot.event_summaries);
                     self.search.truncated |= snapshot.truncated;
                     false
                 } else {
@@ -955,8 +973,12 @@ impl Backend {
             self.search
                 .rows
                 .retain(|row| !snapshot.counts.contains_key(&row.key));
+            self.search
+                .event_summaries
+                .retain(|key, _| !snapshot.counts.contains_key(key));
             self.search.rows.extend(snapshot.rows);
             self.search.counts.extend(snapshot.counts);
+            self.search.event_summaries.extend(snapshot.event_summaries);
             self.search.truncated |= snapshot.truncated;
             if done {
                 self.search_worker = None;
@@ -1012,6 +1034,76 @@ impl Backend {
         self.search_refresh_requested = true;
     }
 
+    fn favorite(&mut self, key: &str, path: &std::path::Path, body: Value) -> ApiReply {
+        let Some(fields) = body.as_object() else {
+            return ApiReply::error(StatusCode::BAD_REQUEST, "收藏参数无效");
+        };
+        let Some(favorite) = fields.get("favorite").and_then(Value::as_bool) else {
+            return ApiReply::error(StatusCode::BAD_REQUEST, "需要 favorite 布尔值");
+        };
+        let question = fields.contains_key("node_id");
+        if fields.len() != if question { 3 } else { 1 }
+            || fields
+                .keys()
+                .any(|key| !matches!(key.as_str(), "favorite" | "node_id" | "generation"))
+        {
+            return ApiReply::error(
+                StatusCode::BAD_REQUEST,
+                "收藏参数无效，问题收藏需要 generation",
+            );
+        }
+        let target = if question {
+            let Some(node_id) = fields.get("node_id").and_then(Value::as_str) else {
+                return ApiReply::error(StatusCode::BAD_REQUEST, "问题标识无效");
+            };
+            let Some(index) = node_id
+                .strip_prefix('q')
+                .filter(|n| {
+                    !n.starts_with('0') && n.len() <= 6 && n.bytes().all(|c| c.is_ascii_digit())
+                })
+                .and_then(|n| n.parse::<usize>().ok())
+                .and_then(|n| n.checked_sub(1))
+            else {
+                return ApiReply::error(StatusCode::BAD_REQUEST, "问题标识无效");
+            };
+            let Some(generation) = fields.get("generation").and_then(Value::as_u64) else {
+                return ApiReply::error(StatusCode::BAD_REQUEST, "问题收藏需要有效 generation");
+            };
+            let Ok(open) = self.get_session(key, false) else {
+                return ApiReply::error(StatusCode::NOT_FOUND, "会话不存在");
+            };
+            if open.generation != generation
+                || !open.initialized
+                || open.offset < open.total
+                || open.error.is_some()
+            {
+                return ApiReply::error(
+                    StatusCode::CONFLICT,
+                    "会话已变化或尚未加载，请刷新后再收藏",
+                );
+            }
+            let Some(turn) = open.session.turns.get(index) else {
+                return ApiReply::error(StatusCode::NOT_FOUND, "问题不存在");
+            };
+            favorites::session_key(path, &open.session.meta.id)
+                .and_then(|session| favorites::question_key(&session, turn))
+        } else {
+            discovery::read_summary(path, &self.config)
+                .and_then(|summary| favorites::session_key(path, &summary.id))
+        };
+        let saved = target.and_then(|target| {
+            favorites::path().and_then(|path| favorites::set(&path, &target, favorite))
+        });
+        match saved {
+            Ok(()) => ApiReply::json(if question {
+                json!({"favorite":favorite,"node_id":fields["node_id"],"generation":fields["generation"]})
+            } else {
+                json!({"favorite":favorite})
+            }),
+            Err(error) => ApiReply::error(StatusCode::CONFLICT, &error.to_string()),
+        }
+    }
+
     fn mutate(&mut self, route: &str, body: Value) -> ApiReply {
         self.tick();
         let Some((key, action)) = management_target(route) else {
@@ -1021,6 +1113,9 @@ impl Backend {
             return ApiReply::error(StatusCode::NOT_FOUND, "会话不存在或路径已改变，请刷新列表");
         }
         let path = self.registered[key].path.clone();
+        if action == "favorite" {
+            return self.favorite(key, &path, body);
+        }
         let Some(fields) = body.as_object().filter(|v| v.len() == 1) else {
             return ApiReply::error(StatusCode::BAD_REQUEST, "管理参数无效");
         };
@@ -1067,6 +1162,7 @@ impl Backend {
             }
             self.search.rows.retain(|row| row.key != key);
             self.search.counts.remove(key);
+            self.search.event_summaries.remove(key);
             self.restart_search_index();
             if self.initial_session.as_deref() == Some(key) {
                 self.initial_session = None;
@@ -1117,6 +1213,8 @@ impl Backend {
             .filter(|key| !key.contains('/'))
         {
             let watch = self.config.watch;
+            let favorite_store = favorites::path().and_then(|path| favorites::load(&path));
+            let registered_path = self.registered.get(key).map(|entry| entry.path.clone());
             let Ok(open) = self.get_session(key, query.get("refresh").is_some_and(|s| s == "1"))
             else {
                 return ApiReply::error(
@@ -1124,10 +1222,32 @@ impl Backend {
                     "会话不存在或文件不可读取，请刷新会话列表",
                 );
             };
-            let (nodes, edges, notices) = trail::graph(&open.session);
+            let (mut nodes, edges, notices) = trail::graph(&open.session);
+            let identity = registered_path
+                .as_ref()
+                .and_then(|path| favorites::session_key(path, &open.session.meta.id).ok());
+            let mut favorite_error = favorite_store.as_ref().err().map(ToString::to_string);
+            if identity.is_none() {
+                favorite_error = Some("无法建立稳定的收藏身份".into());
+            }
+            let favorite = identity
+                .as_ref()
+                .zip(favorite_store.as_ref().ok())
+                .is_some_and(|(key, data)| data.contains(key));
+            for (node, turn) in nodes.iter_mut().zip(&open.session.turns) {
+                node["favorite"] = json!(identity
+                    .as_ref()
+                    .zip(favorite_store.as_ref().ok())
+                    .is_some_and(|(session, data)| {
+                        favorites::question_key(session, turn).is_ok_and(|key| data.contains(&key))
+                    }));
+            }
             let stats = &open.session.parse_stats;
             let id = open.session.meta.id.clone();
             let mut response = json!({"key":key,"meta":{"id":id,"cwd":open.session.meta.cwd.as_ref().map(|p|p.to_string_lossy())},"generation":open.generation,"revision":open.session.revision,"loading":(!open.initialized||open.offset<open.total)&&open.error.is_none(),"error":open.error,"watch":watch,"stats":{"records":stats.records,"malformed_records":stats.malformed_records,"unknown_records":stats.unknown_records,"skipped_oversize_records":stats.skipped_oversize_records,"omitted_text_bytes":stats.omitted_text_bytes},"nodes":nodes,"edges":edges,"notices":notices});
+            response["events"] = json!(open.session.visible_events().collect::<Vec<_>>());
+            response["favorite"] = json!(favorite);
+            response["favorites_error"] = json!(favorite_error);
             response["meta"]["title"] = json!(self.names.get(&id));
             return ApiReply::json(response);
         }
@@ -1151,7 +1271,25 @@ impl Backend {
                 self.start_scan(all);
             }
             let mut sessions = self.listings[i].clone().unwrap_or_default();
+            let favorite_store = favorites::path().and_then(|path| favorites::load(&path));
             for summary in &mut sessions {
+                summary["favorite"] = json!(summary["key"]
+                    .as_str()
+                    .and_then(|key| self.registered.get(key))
+                    .zip(favorite_store.as_ref().ok())
+                    .is_some_and(|(entry, data)| {
+                        favorites::session_key(&entry.path, summary["id"].as_str().unwrap_or(""))
+                            .is_ok_and(|key| data.contains(&key))
+                    }));
+                let event_summary = summary["key"]
+                    .as_str()
+                    .and_then(|key| self.search.event_summaries.get(key));
+                summary["events_loading"] = json!(event_summary.is_none());
+                summary["commit_count"] = json!(event_summary.map(|events| events.commit_count));
+                summary["compaction_count"] =
+                    json!(event_summary.map(|events| events.compaction_count));
+                summary["last_commit"] =
+                    json!(event_summary.and_then(|events| events.last_commit.as_ref()));
                 if let Some(count) = summary["key"]
                     .as_str()
                     .and_then(|key| self.search.counts.get(key))
@@ -1160,7 +1298,7 @@ impl Backend {
                 }
             }
             return ApiReply::json(
-                json!({"loading":self.scan.as_ref().is_some_and(|(active,_)| *active == all)||self.pending[i],"error":self.scan_error[i],"sessions":sessions}),
+                json!({"loading":self.scan.as_ref().is_some_and(|(active,_)| *active == all)||self.pending[i],"error":self.scan_error[i],"favorites_error":favorite_store.as_ref().err().map(ToString::to_string),"sessions":sessions}),
             );
         }
         let parts: Vec<_> = path.trim_start_matches('/').split('/').collect();
@@ -1334,6 +1472,56 @@ mod tests {
     }
 
     #[test]
+    fn admitted_api_requests_have_queue_space_during_a_full_sse_burst() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let (sender, receiver) = request_channel();
+                let mut state = http_state();
+                state.sender = sender.clone();
+                state.capacity = Arc::new(Semaphore::new(MAX_API_REQUESTS));
+                // Freeze the consumer until all eight SSE polls and four API
+                // handlers have enqueued. Scheduling speed cannot hide overflow.
+                let mut event_replies = Vec::new();
+                for _ in 0..MAX_EVENT_CONNECTIONS {
+                    let (reply, pending) = oneshot::channel();
+                    event_replies.push(pending);
+                    assert!(sender.try_send(ApiRequest {
+                        path: "/api/session/s1".into(),
+                        query: HashMap::new(),
+                        mutation: None,
+                        reply,
+                    }).is_ok());
+                }
+                let mut handlers = Vec::new();
+                for _ in 0..MAX_API_REQUESTS {
+                    let request = Request::builder()
+                        .uri("/api/health")
+                        .header("host", &state.authority)
+                        .header("x-codex-nav-token", &state.token)
+                        .body(Body::empty()).unwrap();
+                    handlers.push(Box::pin(handle(State(state.clone()), request)));
+                }
+                std::future::poll_fn(|cx| {
+                    for handler in &mut handlers {
+                        assert!(handler.as_mut().poll(cx).is_pending(), "admitted API request must wait for the consumer, not fail from SSE queue saturation");
+                    }
+                    Poll::Ready(())
+                }).await;
+                let pending: Vec<_> = receiver.try_iter().collect();
+                assert_eq!(pending.len(), MAX_EVENT_CONNECTIONS + MAX_API_REQUESTS);
+                for request in pending {
+                    assert!(request.reply.send(ApiReply::json(json!({"ok":true}))).is_ok());
+                }
+                for handler in handlers {
+                    assert_eq!(handler.await.status(), StatusCode::OK);
+                }
+            });
+    }
+
+    #[test]
     fn authentication_rejects_cross_origin_duplicate_and_missing_headers() {
         let state = http_state();
         let mut headers = HeaderMap::new();
@@ -1436,6 +1624,7 @@ mod tests {
         turn.prompt.text = "old prompt".into();
         let batch = |turns| Update::Batch {
             meta: Default::default(),
+            events: Vec::new(),
             stats: Default::default(),
             revision: 1,
             turns,

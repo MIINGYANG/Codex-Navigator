@@ -238,11 +238,13 @@ fn run() -> Result<()> {
                         stats,
                         revision,
                         turns,
+                        events,
                         reset,
                         offset,
                         total,
                     } => {
                         app.apply_update(meta, stats, revision, turns, reset);
+                        app.update_events(events);
                         app.loading = offset < total;
                         app.progress = if app.loading {
                             Some((offset, total))

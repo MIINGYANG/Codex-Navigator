@@ -1602,7 +1602,7 @@ textarea {
     position: fixed;
     inset: auto 0 0;
     width: 100%;
-    max-height: 61dvh;
+    max-height: min(61dvh, var(--qt-sheet-height, 45dvh));
     border-left: 0;
     border-top: 1px solid var(--qt-border);
     border-radius: 18px 18px 0 0;
@@ -1703,5 +1703,307 @@ textarea {
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Session organization follows the existing canvas, with restrained semantic colors. */
+:root {
+  --qt-favorite: #9a6700;
+  --qt-compaction: #8055c6;
+}
+:root[data-theme="dark"] {
+  --qt-favorite: #e9bd58;
+  --qt-compaction: #c4b5fd;
+}
+.session-filters,
+.events-filters,
+.layout-controls {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid var(--qt-border);
+  border-radius: 9px;
+  background: var(--qt-input);
+}
+.session-filters {
+  margin: 0 16px 8px;
+}
+.session-filters button,
+.events-filters button,
+.layout-controls button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 9px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--qt-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.session-filters button {
+  flex: 1;
+}
+.session-filters button[aria-pressed="true"],
+.events-filters button[aria-pressed="true"],
+.layout-controls button[aria-pressed="true"] {
+  color: var(--qt-accent-strong);
+  background: var(--qt-panel);
+  box-shadow: 0 1px 3px rgb(var(--qt-shadow-rgb) / 8%);
+}
+.favorite-priority {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 20px 10px;
+  color: var(--qt-secondary);
+  font-size: 10px;
+}
+input[type="checkbox"] {
+  accent-color: var(--qt-accent);
+}
+.session-row.is-favorite .session-item {
+  background: color-mix(in srgb, var(--qt-panel) 94%, var(--qt-favorite));
+}
+.session-row.is-favorite .session-item.active {
+  background: var(--qt-accent-soft);
+}
+.session-row.has-commits .session-item {
+  box-shadow: inset 2px 0 var(--qt-success);
+}
+.session-favorite {
+  position: absolute;
+  right: 7px;
+  top: 43px;
+  width: 26px;
+  height: 26px;
+}
+.favorite-button.is-on,
+.session-favorite.is-on {
+  color: var(--qt-favorite);
+}
+.favorite-button.is-on svg,
+.session-favorite.is-on svg {
+  fill: color-mix(in srgb, var(--qt-favorite) 18%, transparent);
+}
+.session-commit-summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 5px;
+  color: var(--qt-success);
+  font-size: 10px;
+}
+.session-commit-summary em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-style: normal;
+}
+.current-commit {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  margin-top: 8px;
+  padding: 4px 7px;
+  border: 1px solid color-mix(in srgb, var(--qt-success) 26%, var(--qt-border));
+  border-radius: 6px;
+  background: var(--qt-success-soft);
+  color: var(--qt-success);
+  font-size: 10px;
+  cursor: pointer;
+}
+.current-commit svg {
+  flex-shrink: 0;
+}
+.current-commit span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.current-commit span:first-of-type {
+  max-width: 310px;
+}
+.canvas-toolbar {
+  flex-wrap: wrap;
+}
+.zoom-tools {
+  margin-left: auto;
+}
+.canvas-contextbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 26px 12px;
+  font-size: 10px;
+  color: var(--qt-muted);
+}
+.canvas-contextbar > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.canvas-contextbar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 0;
+  border: 0;
+  background: transparent;
+  color: var(--qt-secondary);
+  font-size: 10px;
+  cursor: pointer;
+}
+.canvas-contextbar button[aria-pressed="true"] {
+  color: var(--qt-favorite);
+}
+.canvas-contextbar label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.event-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.event-title h3 {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.event-title.commit,
+.session-event-row.commit > svg:first-child {
+  color: var(--qt-success);
+}
+.event-title.compaction,
+.session-event-row.compaction > svg:first-child {
+  color: var(--qt-compaction);
+}
+.event-summary {
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+}
+.event-facts {
+  display: grid;
+  gap: 6px;
+  margin: 23px 0;
+}
+.event-facts dt {
+  margin-top: 9px;
+  color: var(--qt-muted);
+  font-size: 11px;
+}
+.event-facts dd {
+  margin: 0;
+  color: var(--qt-body-text);
+  font-size: 12px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.event-evidence {
+  margin: 20px 0;
+  color: var(--qt-secondary);
+  font-size: 11px;
+}
+.event-evidence p {
+  overflow-wrap: anywhere;
+}
+.event-evidence summary {
+  cursor: pointer;
+}
+.event-locate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 22px;
+}
+.events-dialog-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 20px 22px 14px;
+}
+.events-dialog-header h2 {
+  flex: 1;
+  margin: 0;
+  font-size: 16px;
+}
+.events-filters {
+  align-self: flex-start;
+  margin: 0 22px 12px;
+}
+.events-list {
+  padding: 0 14px 14px;
+  overflow-y: auto;
+  max-height: 55dvh;
+}
+.session-event-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 13px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--qt-border-soft);
+  background: transparent;
+  color: var(--qt-body-text);
+  text-align: left;
+  cursor: pointer;
+}
+.session-event-row:hover {
+  background: var(--qt-hover);
+  border-radius: 8px;
+}
+.session-event-row > svg {
+  flex-shrink: 0;
+}
+.session-event-row > span {
+  flex: 1;
+  min-width: 0;
+}
+.session-event-row strong {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+}
+.session-event-row small {
+  display: block;
+  margin-top: 5px;
+  color: var(--qt-secondary);
+  font-size: 10px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 899px) {
+  .canvas-contextbar {
+    padding: 0 16px 9px;
+  }
+  .canvas-contextbar > span {
+    display: none;
+  }
+  .canvas-contextbar > div {
+    gap: 10px;
+  }
+  .layout-controls {
+    order: 3;
+  }
+  .layout-controls button {
+    padding: 5px 9px;
+    font-size: 10px;
+  }
+  .canvas-toolbar {
+    row-gap: 8px;
+    padding-bottom: 9px;
+  }
+  .current-commit span:first-of-type {
+    max-width: 130px;
   }
 }

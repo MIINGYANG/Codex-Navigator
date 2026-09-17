@@ -37,6 +37,7 @@ pub struct Parser {
     activity_order: VecDeque<(usize, usize)>,
     saw_meta: bool,
     items: usize,
+    events: super::events::Events,
 }
 
 impl Parser {
@@ -61,6 +62,7 @@ impl Parser {
             activity_order: VecDeque::new(),
             saw_meta: false,
             items: 0,
+            events: super::events::Events::default(),
         }
     }
     pub fn consume(&mut self, record: Record<'_>) {
@@ -190,6 +192,8 @@ impl Parser {
                 }
             }
         }
+        self.events
+            .observe(v, self.active, self.seq, &mut self.session);
     }
     fn start(&mut self, id: Option<&str>, timestamp: Option<DateTime<Utc>>) {
         let id = id.filter(|id| !id.is_empty() && id.len() <= 256);
@@ -260,7 +264,11 @@ impl Parser {
             }
             "thread_rollback" | "thread_rolled_back" | "rollback" => self.rollback(p),
             "exec_command_end" => self.command(p),
-            "token_count" | "agent_reasoning" | "agent_reasoning_raw_content" => (),
+            "token_count"
+            | "agent_reasoning"
+            | "agent_reasoning_raw_content"
+            | "context_compacted"
+            | "ContextCompacted" => (),
             _ => self.session.parse_stats.unknown_records += 1,
         }
     }
@@ -350,7 +358,8 @@ impl Parser {
                     is_error: is_error || activity::error(p),
                 });
             }
-            "reasoning" | "message" => (),
+            "reasoning" | "message" | "context_compaction" | "compaction_trigger"
+            | "compaction" => (),
             _ => self.session.parse_stats.unknown_records += 1,
         }
     }

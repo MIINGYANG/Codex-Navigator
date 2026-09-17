@@ -5,11 +5,14 @@ import {
   ArrowRight,
   ArrowUp,
   Check,
+  ChevronsDownUp,
+  Clock,
   ChevronRight,
   Copy,
   FileText,
   Focus,
   GitBranch,
+  GitCommitHorizontal,
   House,
   Info,
   Maximize2,
@@ -23,6 +26,7 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
+  Star,
   X,
 } from "lucide-react";
 import Canvas, { type CanvasHandle } from "./Canvas";
@@ -33,8 +37,14 @@ import SessionActionDialog, {
   type SessionAction,
   type SessionTarget,
 } from "./SessionActions";
-import type { QuestionGraph, QuestionNode } from "./graph";
-import { api, subscribe } from "./api";
+import type {
+  QuestionGraph,
+  QuestionNode,
+  SessionEvent,
+  CanvasLayout,
+} from "./graph";
+import { api, subscribe, saveFavorite } from "./api";
+import { EventDetail, EventsDialog } from "./SessionEvents";
 import {
   fullTime,
   groupResults,
@@ -43,6 +53,8 @@ import {
   initialLoadTransition,
   relativeTime,
   titleOf,
+  canvasPreferences,
+  filterSessions,
   type SearchResult,
   type SessionSummary,
 } from "./state";
@@ -56,6 +68,9 @@ type GraphResponse = QuestionGraph & {
   error: string | null;
   watch: boolean;
   notices: string[];
+  favorite?: boolean;
+  favorites_error?: string | null;
+  events?: SessionEvent[];
   stats?: {
     malformed_records?: number;
     skipped_oversize_records?: number;
@@ -123,6 +138,27 @@ export default function App() {
   const [connected, setConnected] = useState(false);
   const [watch, setWatch] = useState(true);
   const [toast, setToast] = useState("");
+  const [layout, setLayout] = useState<CanvasLayout>(() => {
+    try {
+      return canvasPreferences(
+        JSON.parse(localStorage.getItem("questionTrail.layout") || "null"),
+      );
+    } catch {
+      return canvasPreferences(null);
+    }
+  });
+  const [sessionFilter, setSessionFilter] = useState<
+    "all" | "favorites" | "commits"
+  >("all");
+  const [favoriteFirst, setFavoriteFirst] = useState(false);
+  const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [showCompactions, setShowCompactions] = useState(true);
+  const [eventsOpen, setEventsOpen] = useState(false);
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [favoritesError, setFavoritesError] = useState("");
+  const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
+  const favoriteInFlight = useRef(new Set<string>());
+  const favoriteEpoch = useRef(0);
   const [sessionAction, setSessionAction] = useState<{
     session: SessionTarget;
     action: SessionAction;
@@ -131,6 +167,7 @@ export default function App() {
   const renamedGraphs = useRef(new Map<string, string>());
   const deletedSessions = useRef(new Set<string>());
   const canvas = useRef<CanvasHandle>(null);
+  const canvasStage = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphResponse | null>(null);
   const requestedNode = useRef<{ key: string; id: string } | null>(null);
   const refreshGraph = useRef<() => void>(() => {});
@@ -138,7 +175,36 @@ export default function App() {
   const initialSelection = useRef(false);
   const currentSession = sessions.find((session) => session.key === key);
   const selected = graph?.nodes.find((node) => node.id === selectedId) || null;
+  const selectedEvent =
+    graph?.events?.find((event) => event.id === selectedEventId) || null;
+  const sessionEvents = graph?.events || [];
+  const lastCommit = sessionEvents
+    .filter((event) => event.kind === "commit")
+    .at(-1);
   const pending = Math.max(0, (graph?.nodes.length || 0) - seen);
+
+  useEffect(() => {
+    const stage = canvasStage.current;
+    const workspace = stage?.closest<HTMLElement>(".workspace-body");
+    if (!stage || !workspace) return;
+    const measure = () =>
+      workspace.style.setProperty(
+        "--qt-sheet-height",
+        `${Math.max(120, stage.clientHeight - 150)}px`,
+      );
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(stage);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("questionTrail.layout", JSON.stringify(layout));
+    } catch {
+      /* In-memory preference still works. */
+    }
+  }, [layout]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -147,6 +213,7 @@ export default function App() {
     let rescanPending = false;
     let configured = false;
     let autoWatch = true;
+    let pendingIndexPolls = 0;
     async function scan(rescan = false) {
       if (controller.signal.aborted) return;
       if (busy) {
@@ -157,6 +224,7 @@ export default function App() {
       clearTimeout(timer);
       let delay = 15000;
       try {
+        const requestedFavoriteEpoch = favoriteEpoch.current;
         if (!configured) {
           const info = await api<{
             watch: boolean;
@@ -175,11 +243,16 @@ export default function App() {
           loading: boolean;
           error: string | null;
           sessions: SessionSummary[];
+          favorites_error?: string | null;
         }>(
           `/api/sessions?all=1${rescan ? "&refresh=1" : ""}`,
           controller.signal,
         );
         if (controller.signal.aborted) return;
+        if (requestedFavoriteEpoch !== favoriteEpoch.current) {
+          rescanPending = true;
+          return;
+        }
         for (const session of data.sessions) {
           if (renamedSessions.current.get(session.key) === session.title)
             renamedSessions.current.delete(session.key);
@@ -190,9 +263,17 @@ export default function App() {
           deletedSessions.current,
         );
         setSessions(nextSessions);
+        setFavoritesError(data.favorites_error || "");
         setSessionsLoading(data.loading);
         setSessionError(data.error || "");
         if (data.loading) delay = 500;
+        else if (
+          nextSessions.some((session) => session.events_loading) &&
+          pendingIndexPolls < 20
+        ) {
+          delay = 1000;
+          pendingIndexPolls += 1;
+        } else pendingIndexPolls = 0;
         if (!initialSelection.current && nextSessions.length) {
           initialSelection.current = true;
           setKey(nextSessions[0].key);
@@ -236,6 +317,8 @@ export default function App() {
     setGraph(null);
     setGraphError("");
     setSelectedId(null);
+    setSelectedEventId(null);
+    setEventsOpen(false);
     setFocusPath(false);
     setSeen(0);
     setConnected(false);
@@ -251,6 +334,7 @@ export default function App() {
       busy = true;
       clearTimeout(timer);
       try {
+        const requestedFavoriteEpoch = favoriteEpoch.current;
         const suffix = manualPending ? "?refresh=1" : "";
         manualPending = false;
         const next = await api<GraphResponse>(
@@ -262,6 +346,10 @@ export default function App() {
           deletedSessions.current.has(sessionKey)
         )
           return;
+        if (requestedFavoriteEpoch !== favoriteEpoch.current) {
+          again = true;
+          return;
+        }
         const renamed = renamedGraphs.current.get(sessionKey);
         if (renamed !== undefined) {
           if (next.meta.title === renamed)
@@ -275,10 +363,22 @@ export default function App() {
           previous.revision !== next.revision ||
           previous.loading !== next.loading ||
           previous.error !== next.error ||
-          previous.meta.title !== next.meta.title;
+          previous.meta.title !== next.meta.title ||
+          previous.favorite !== next.favorite ||
+          previous.favorites_error !== next.favorites_error ||
+          previous.nodes.some(
+            (node, index) => node.favorite !== next.nodes[index]?.favorite,
+          );
         if (changed) {
           graphRef.current = next;
           setGraph(next);
+          setSelectedEventId((value) =>
+            previous && previous.generation !== next.generation
+              ? null
+              : next.events?.some((event) => event.id === value)
+                ? value
+                : null,
+          );
           setSelectedId((value) =>
             reconcileSelection(
               value,
@@ -345,6 +445,7 @@ export default function App() {
   }, [toast]);
 
   const selectNode = useCallback((id: string) => {
+    setSelectedEventId(null);
     setSelectedId(id);
     const node = graphRef.current?.nodes.find((item) => item.id === id);
     if (node?.isLatest) setSeen(graphRef.current!.nodes.length);
@@ -359,17 +460,27 @@ export default function App() {
   const closeOverlays = useCallback(() => {
     if (sessionAction) return;
     if (searchOpen) setSearchOpen(false);
+    else if (eventsOpen) setEventsOpen(false);
     else if (sidebarOpen) setSidebarOpen(false);
+    else if (selectedEventId) setSelectedEventId(null);
     else if (selectedId) {
       setSelectedId(null);
       setFocusPath(false);
     } else if (expanded) setExpanded(false);
-  }, [searchOpen, sidebarOpen, selectedId, expanded, sessionAction]);
+  }, [
+    searchOpen,
+    eventsOpen,
+    sidebarOpen,
+    selectedId,
+    selectedEventId,
+    expanded,
+    sessionAction,
+  ]);
   useEscape(closeOverlays);
 
   useEffect(() => {
     const handle = (event: KeyboardEvent) => {
-      if (sessionAction) return;
+      if (sessionAction || eventsOpen) return;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
         event.preventDefault();
         setSearchOpen(true);
@@ -404,7 +515,80 @@ export default function App() {
     };
     window.addEventListener("keydown", handle);
     return () => window.removeEventListener("keydown", handle);
-  }, [graph, selected, searchOpen, navigate, sessionAction]);
+  }, [graph, selected, searchOpen, navigate, sessionAction, eventsOpen]);
+
+  async function toggleFavorite(
+    sessionKey: string,
+    favorite: boolean,
+    node?: QuestionNode,
+  ) {
+    const pendingKey = `${sessionKey}:${node?.id || "session"}`;
+    if (favoriteInFlight.current.has(pendingKey)) return;
+    const generation = graphRef.current?.generation;
+    if (
+      node &&
+      (graphRef.current?.key !== sessionKey || generation === undefined)
+    )
+      return;
+    favoriteInFlight.current.add(pendingKey);
+    setFavoriteBusy(new Set(favoriteInFlight.current));
+    favoriteEpoch.current++;
+    try {
+      await saveFavorite(
+        sessionKey,
+        favorite,
+        node ? { node_id: node.id, generation: generation! } : undefined,
+      );
+      if (!node)
+        setSessions((items) =>
+          items.map((item) =>
+            item.key === sessionKey ? { ...item, favorite } : item,
+          ),
+        );
+      const current = graphRef.current;
+      if (
+        current?.key === sessionKey &&
+        (!node || current.generation === generation)
+      ) {
+        const next = node
+          ? {
+              ...current,
+              nodes: current.nodes.map((item) =>
+                item.id === node.id ? { ...item, favorite } : item,
+              ),
+            }
+          : { ...current, favorite };
+        graphRef.current = next;
+        setGraph(next);
+      }
+      setToast(
+        favorite
+          ? `已收藏${node ? "问题" : "会话"}`
+          : `已取消${node ? "问题" : "会话"}收藏`,
+      );
+    } catch (error) {
+      setToast((error as Error).message);
+    } finally {
+      favoriteEpoch.current++;
+      favoriteInFlight.current.delete(pendingKey);
+      setFavoriteBusy(new Set(favoriteInFlight.current));
+      refreshSessions.current();
+      refreshGraph.current();
+    }
+  }
+
+  const chooseEvent = useCallback((event: SessionEvent) => {
+    setEventsOpen(false);
+    setSelectedEventId(event.id);
+    setExpanded(false);
+    const node = graphRef.current?.nodes.find(
+      (node) => node.turnIndex === event.turn_index,
+    );
+    if (node) {
+      setSelectedId(node.id);
+      requestAnimationFrame(() => canvas.current?.focus(node.id));
+    }
+  }, []);
 
   function manage(session: SessionTarget, action: SessionAction) {
     setSearchOpen(false);
@@ -469,12 +653,15 @@ export default function App() {
       refreshGraph.current();
     }
   }
-  const visibleSessions = sessions.filter((session) =>
-    `${titleOf(session)} ${session.cwd || ""}`
-      .toLocaleLowerCase()
-      .includes(sessionQuery.trim().toLocaleLowerCase()),
+  const visibleSessions = filterSessions(
+    sessions,
+    sessionQuery,
+    sessionFilter,
+    favoriteFirst,
   );
   const warnings = [...(graph?.notices || [])];
+  if (graph?.favorites_error || favoritesError)
+    warnings.push(graph?.favorites_error || favoritesError);
   const currentTitle = currentSession
     ? titleOf(currentSession)
     : graph?.meta.title?.trim() ||
@@ -551,6 +738,36 @@ export default function App() {
             </button>
           )}
         </label>
+        <div className="session-filters" role="group" aria-label="会话分类">
+          {(
+            [
+              ["all", "全部"],
+              ["favorites", "收藏"],
+              ["commits", "有提交"],
+            ] as const
+          ).map(([value, label]) => (
+            <button
+              key={value}
+              aria-pressed={sessionFilter === value}
+              onClick={() => setSessionFilter(value)}
+            >
+              {value === "favorites" ? (
+                <Star size={12} />
+              ) : value === "commits" ? (
+                <GitCommitHorizontal size={13} />
+              ) : null}
+              {label}
+            </button>
+          ))}
+        </div>
+        <label className="favorite-priority">
+          <input
+            type="checkbox"
+            checked={favoriteFirst}
+            onChange={(event) => setFavoriteFirst(event.target.checked)}
+          />
+          收藏优先
+        </label>
         <nav className="session-list" aria-label="选择会话">
           {sessionsLoading && !sessions.length && (
             <div className="skeleton-list" aria-label="正在查找会话">
@@ -560,7 +777,10 @@ export default function App() {
             </div>
           )}
           {visibleSessions.map((session) => (
-            <div className="session-row" key={session.key}>
+            <div
+              className={`session-row ${session.favorite ? "is-favorite" : ""} ${(session.commit_count || 0) > 0 ? "has-commits" : ""}`}
+              key={session.key}
+            >
               <button
                 className={`session-item ${session.key === key ? "active" : ""}`}
                 aria-current={session.key === key ? "true" : undefined}
@@ -580,8 +800,28 @@ export default function App() {
                     {relativeTime(session.updated_at)}
                   </span>
                   <small>{session.cwd || "项目路径未记录"}</small>
+                  {(session.commit_count || 0) > 0 && (
+                    <span className="session-commit-summary">
+                      <GitCommitHorizontal size={11} />
+                      已提交 {session.commit_count}
+                      {session.last_commit?.version && (
+                        <em>{session.last_commit.version}</em>
+                      )}
+                    </span>
+                  )}
                 </span>
                 <ChevronRight size={14} />
+              </button>
+              <button
+                className={`session-favorite icon-button ${session.favorite ? "is-on" : ""}`}
+                aria-label={`${session.favorite ? "取消收藏" : "收藏"}会话：${titleOf(session)}`}
+                aria-pressed={Boolean(session.favorite)}
+                disabled={favoriteBusy.has(`${session.key}:session`)}
+                onClick={() =>
+                  void toggleFavorite(session.key, !session.favorite)
+                }
+              >
+                <Star size={14} />
               </button>
               <SessionActions
                 session={{
@@ -595,7 +835,13 @@ export default function App() {
           ))}
           {!sessionsLoading && !visibleSessions.length && (
             <p className="quiet-empty">
-              {sessionQuery ? "没有匹配的会话" : "还没有发现主会话"}
+              {sessionQuery
+                ? "没有匹配的会话"
+                : sessionFilter === "favorites"
+                  ? "还没有收藏会话，点击会话旁的星标即可收藏。"
+                  : sessionFilter === "commits"
+                    ? "尚未发现已确认提交的会话；完整索引可能仍在读取中。"
+                    : "还没有发现主会话"}
             </p>
           )}
         </nav>
@@ -616,7 +862,7 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Codex Navigator 3.0</span>
+          <span className="version">Codex Navigator 3.1</span>
         </div>
       </aside>
 
@@ -671,6 +917,24 @@ export default function App() {
                 </div>
                 <div className="session-heading-title">
                   <h1 title={currentTitle}>{currentTitle}</h1>
+                  {key && (graph || currentSession) && (
+                    <button
+                      className={`icon-button favorite-button ${(graph?.favorite ?? currentSession?.favorite) ? "is-on" : ""}`}
+                      aria-label="收藏当前会话"
+                      aria-pressed={Boolean(
+                        graph?.favorite ?? currentSession?.favorite,
+                      )}
+                      disabled={favoriteBusy.has(`${key}:session`)}
+                      onClick={() =>
+                        void toggleFavorite(
+                          key,
+                          !(graph?.favorite ?? currentSession?.favorite),
+                        )
+                      }
+                    >
+                      <Star size={17} />
+                    </button>
+                  )}
                   {key && (currentSession || graph) && (
                     <SessionActions
                       session={{
@@ -694,6 +958,19 @@ export default function App() {
                     }
                     notify={setToast}
                   />
+                )}
+                {lastCommit && (
+                  <button
+                    className="current-commit"
+                    onClick={() => chooseEvent(lastCommit)}
+                    title="查看最近一次提交"
+                  >
+                    <GitCommitHorizontal size={14} />
+                    <span>{lastCommit.repository || "仓库未记录"}</span>
+                    <GitBranch size={12} />
+                    <span>{lastCommit.branch || "分支未记录"}</span>
+                    <span>{lastCommit.version || lastCommit.hash}</span>
+                  </button>
                 )}
               </div>
               <button
@@ -737,6 +1014,46 @@ export default function App() {
                   <span>聚焦路径</span>
                 </button>
               </div>
+              <div
+                className="layout-controls"
+                role="group"
+                aria-label="画布排列"
+              >
+                <button
+                  aria-pressed={layout.direction === "vertical"}
+                  onClick={() =>
+                    setLayout((value) => ({ ...value, direction: "vertical" }))
+                  }
+                >
+                  <ArrowDown size={14} />
+                  纵向
+                </button>
+                <button
+                  aria-pressed={layout.direction === "horizontal"}
+                  onClick={() =>
+                    setLayout((value) => ({
+                      ...value,
+                      direction: "horizontal",
+                    }))
+                  }
+                >
+                  <ArrowRight size={14} />
+                  横向
+                </button>
+                <button
+                  aria-pressed={layout.density === "compact"}
+                  onClick={() =>
+                    setLayout((value) => ({
+                      ...value,
+                      density:
+                        value.density === "compact" ? "comfortable" : "compact",
+                    }))
+                  }
+                >
+                  <ChevronsDownUp size={14} />
+                  {layout.density === "compact" ? "紧凑" : "舒适"}
+                </button>
+              </div>
               <div className="toolbar-group zoom-tools">
                 <button
                   aria-label="缩小"
@@ -760,6 +1077,37 @@ export default function App() {
                 >
                   <Maximize2 size={16} />
                 </button>
+              </div>
+            </div>
+            <div className="canvas-contextbar">
+              <span>
+                {layout.direction === "horizontal" ? "横向排列" : "纵向排列"} ·{" "}
+                {layout.density === "compact" ? "紧凑间距" : "舒适间距"}
+              </span>
+              <div>
+                <button
+                  aria-pressed={favoriteOnly}
+                  onClick={() => setFavoriteOnly(!favoriteOnly)}
+                  title="高亮星标问题，保留其余关系作为参照"
+                >
+                  <Star size={12} />
+                  星标问题{" "}
+                  {graph?.nodes.filter((node) => node.favorite).length || 0}
+                </button>
+                <button disabled={!graph} onClick={() => setEventsOpen(true)}>
+                  <Clock size={13} />
+                  会话事件 {sessionEvents.length}
+                </button>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={showCompactions}
+                    onChange={(event) =>
+                      setShowCompactions(event.target.checked)
+                    }
+                  />
+                  压缩标记
+                </label>
               </div>
             </div>
             {(graphError ||
@@ -786,7 +1134,7 @@ export default function App() {
                 )}
               </div>
             )}
-            <div className="canvas-stage">
+            <div className="canvas-stage" ref={canvasStage}>
               {graph?.nodes.length ? (
                 <Canvas
                   ref={canvas}
@@ -798,6 +1146,13 @@ export default function App() {
                   focusPath={focusPath}
                   onFocusPathChange={setFocusPath}
                   onZoomChange={setZoom}
+                  layout={layout}
+                  favoriteOnly={favoriteOnly}
+                  events={showCompactions ? sessionEvents : []}
+                  onToggleFavorite={(node) => {
+                    if (key) void toggleFavorite(key, !node.favorite, node);
+                  }}
+                  onEventSelect={chooseEvent}
                 />
               ) : graph?.loading ||
                 (key && !graph && !graphError) ||
@@ -854,24 +1209,37 @@ export default function App() {
               )}
             </div>
           </main>
-          {!expanded && (
-            <DetailPanel
-              key={`${key}:${graph?.generation}:${selectedId}`}
-              sessionKey={key}
-              node={selected}
-              graph={graph || emptyGraph}
-              revision={graph?.revision || 0}
-              onNavigate={navigate}
-              onClose={() => {
-                setSelectedId(null);
-                setFocusPath(false);
+          {!expanded && selectedEvent ? (
+            <EventDetail
+              event={selectedEvent}
+              onClose={() => setSelectedEventId(null)}
+              onLocate={(index) => {
+                const node = graph?.nodes.find(
+                  (node) => node.turnIndex === index,
+                );
+                if (node) navigate(node.id);
               }}
-              onFocus={() => {
-                setFocusPath(true);
-                if (selectedId) canvas.current?.focus(selectedId);
-              }}
-              notify={setToast}
             />
+          ) : (
+            !expanded && (
+              <DetailPanel
+                key={`${key}:${graph?.generation}:${selectedId}`}
+                sessionKey={key}
+                node={selected}
+                graph={graph || emptyGraph}
+                revision={graph?.revision || 0}
+                onNavigate={navigate}
+                onClose={() => {
+                  setSelectedId(null);
+                  setFocusPath(false);
+                }}
+                onFocus={() => {
+                  setFocusPath(true);
+                  if (selectedId) canvas.current?.focus(selectedId);
+                }}
+                notify={setToast}
+              />
+            )
           )}
         </div>
       </div>
@@ -879,6 +1247,14 @@ export default function App() {
         <SearchDialog
           onClose={() => setSearchOpen(false)}
           onChoose={chooseResult}
+        />
+      )}
+      {eventsOpen && (
+        <EventsDialog
+          events={sessionEvents}
+          loading={Boolean(graph?.loading)}
+          onChoose={chooseEvent}
+          onClose={() => setEventsOpen(false)}
         />
       )}
       {sessionAction && (
