@@ -202,3 +202,10 @@
 **Key insight:** Codex0.153.2会向旁观连接广播临时线程创建与状态，但正文事件只发给已订阅的创建连接；临时线程读取turns与resume均被拒绝，没有thread/subscribe接口。真实隔离TUI的/btw请求lastTurnId为空，因此即使采用显式协议中转，也必须区分明确父轮次与待确认位置，并排除内部边界注入。
 **Details / snippet:** PoC未发送turn/start或请求模型；合成shellCommand验证双方事件差异，Unix socket实测为HTTP Upgrade后的WebSocket frames。候选中转需改变启动方式，已向用户询问，未自动修改真实配置；详见docs/side-chat-capture.md。
 **Tags:** #btw #app-server #protocol #ephemeral #verification
+
+
+## 2026-09-17 — 3.2.0 发布范围与远程同步
+**Question:** 确认本版仅收藏改进、不含/btw收录后，如何更新文档并推送？
+**Key insight:** 已验证的产品功能和探索性材料需要在README、CHANGELOG与Agent指南中一致区分。发布标签保留在功能提交，范围说明和推送验收以main文档提交追加，不为了补充说明移动标签。
+**Details / snippet:** 非强制原子推送main与v3.2.0，读回main为4175be3、版本标签解引用为e00db39；文档明确未实现自动采集、侧聊存档、手动导入或专用启动入口。应用代码未变，复用既有完整验收。
+**Tags:** #release #documentation #scope #git #verification
