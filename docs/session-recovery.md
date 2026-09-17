@@ -6,6 +6,16 @@
 
 Navigator 3.2.1 之前的删除流程缺少这项依赖检查。3.2.1 会扫描活动和归档会话的首条元数据，发现依赖、重复身份、损坏或无法完整检查时拒绝删除；它不会自动修复已缺失的文件。删除前仍需结束正在使用或创建相关分支的 Codex 进程，避免检查期间产生新的依赖。
 
+## 为什么 Codex 终端删除与 Navigator 回收站不同
+
+Codex 0.153.2 同时提供 `codex delete`（永久删除）和 `codex archive`（归档），不能仅凭会话从列表消失就判定执行了哪一个。官方 `thread/delete` 使用线程存储管理流程；本机原生二进制中可查到 `failed to scan fork history references` 和 `forked history still references it` 的拒绝删除错误。旧 Navigator 单独移动 rollout，没有走该流程。
+
+[官方 App Server 文档](https://learn.chatgpt.com/docs/app-server) 说明 `thread/delete` 永久删除线程、rollout 和元数据，还涉及 spawned descendants；这不等于替所有用户 fork 分支复制完整历史。Navigator 的回收站操作也不等价于此 API。3.2.1 保留可恢复回收站的约定，独立检查历史引用；不会擅自改为官方永久删除。
+
+如果只是整理列表，可使用 Codex 官方归档保留 transcript，参见[官方命令说明](https://learn.chatgpt.com/docs/developer-commands?surface=cli)。Navigator 目前没有 Web 归档入口。
+
+核查修复是否生效时，先运行 `codex-nav --version`，并确认网页服务已经停止旧进程、使用新命令重启。本地源码提交、GitHub 上的版本、安装的命令与已运行的网页进程可能不同；安装新文件本身不会更新旧进程。
+
 ## 在出错的设备上定位文件
 
 进入包含此脚本的 Navigator 源码目录执行（把路径、ID 换成报错中的值）：

@@ -221,3 +221,9 @@
 **Key insight:** 用户在目标设备确认两个失败会话依赖同一祖先来源，并在恢复文件后成功恢复对话，与隔离复现一致。3.2.1 解决 Web 删除缺少依赖检查的问题：先扫描引用再调用回收站；不自动补回已删除内容，也不替代部署更新。
 **Details / snippet:** 用户报告恢复 rollout 和 codex 开头的文件后成功；本机未访问该设备，不推断后者作用。功能提交 f7837ff 与本地 v3.2.1 已通过完整验收，尚未推送、安装或重启服务；本轮只补充恢复结果记录，git diff --check通过，不重复运行应用测试。
 **Tags:** #recovery #lineage #verification #release
+
+## 2026-09-17 — 官方删除与回收站移动不是同一操作
+**Question:** 为什么 Codex 终端删除后其他会话正常，Navigator 删除却断开历史链？
+**Key insight:** Codex0.153.2同时有delete和archive；正式delete的本地实现包含fork历史引用扫描与拒绝删除错误，且官方文档说明它管理rollout、元数据和spawned descendants。旧Navigator只对单文件执行gio trash，绕过了这些约束；3.2.1补齐预检查，但代码提交未部署时不会保护旧服务。
+**Details / snippet:** 本次缺失的是中间来源01a0a5c7-e72d-72d3-84d3-332d99e98500。三层依赖与HTTP拒删两项合成回归通过；本机命令仍3.2.0，修复3.2.1尚未推送。目标设备版本和实际命令已询问，新的恢复结果未确认；未执行永久删除、未操作目标设备。文档补充版本核对与官方操作区别。
+**Tags:** #delete #archive #lineage #deployment #verification
