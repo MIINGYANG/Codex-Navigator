@@ -8,6 +8,7 @@ import {
   fullTime,
   groupResults,
   reconcileSelection,
+  reconcileEventView,
   initialLoadTransition,
   reconcileSessions,
 } from "./state.ts";
@@ -161,4 +162,29 @@ test("会话筛选按收藏及可靠提交计数工作，收藏优先保持组�
     sessions.map((s) => s.key),
     ["a", "b", "c", "d"],
   );
+});
+
+test("压缩分组弹窗保留同代追加，切换会话、重置或关联边消失清除范围", () => {
+  const view = { key: "s1", generation: 1, edgeId: "e2", label: "Q2 → Q3" };
+  const graph = {
+    key: "s1",
+    generation: 1,
+    edges: [{ id: "e2" }, { id: "e3" }],
+  };
+  assert.equal(reconcileEventView(view, graph), view);
+  assert.equal(
+    reconcileEventView(view, {
+      ...graph,
+      edges: [...graph.edges, { id: "e4" }],
+    }),
+    view,
+  );
+  assert.equal(reconcileEventView(view, { ...graph, key: "s2" }), null);
+  assert.equal(reconcileEventView(view, { ...graph, generation: 2 }), null);
+  assert.equal(
+    reconcileEventView(view, { ...graph, edges: [{ id: "e3" }] }),
+    null,
+  );
+  assert.equal(reconcileEventView("all", graph), "all");
+  assert.equal(reconcileEventView(null, graph), null);
 });

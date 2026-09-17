@@ -4,6 +4,7 @@ import {
   CARD_HEIGHT,
   CARD_WIDTH,
   compactionEdges,
+  compactionMarkerPosition,
   layoutMetrics,
   edgePorts,
   highlightedPath,
@@ -496,4 +497,82 @@ test("大规模横向分支也沿正确方向前进且不递归溢出", () => {
   );
   assert.equal(positions.size, 1000);
   assert.ok(positions.get("q900").x > positions.get("q800").x);
+});
+
+test("同边四条压缩聚合为一组，其他边、提交与末尾事件不混入，追加后按原序更新", () => {
+  const graph = fixture(5);
+  const events = Array.from({ length: 4 }, (_, i) => ({
+    id: `c${i}`,
+    kind: "compaction",
+    turn_index: 1,
+    timestamp: `2026-09-17T10:0${i}:00Z`,
+    source: "compacted",
+    trigger: i === 0 ? "auto" : i === 1 ? "manual" : "unknown",
+  }));
+  events.splice(1, 0, { ...events[0], id: "commit", kind: "commit" });
+  events.push(
+    { ...events[0], id: "other-edge", turn_index: 2 },
+    { ...events[0], id: "last-turn", turn_index: 4 },
+  );
+  const groups = compactionEdges(graph, events);
+  assert.equal(groups.size, 2);
+  assert.deepEqual(
+    groups.get("e2").map((event) => event.id),
+    ["c0", "c1", "c2", "c3"],
+  );
+  assert.deepEqual(
+    groups.get("e3").map((event) => event.id),
+    ["other-edge"],
+  );
+  const appended = compactionEdges(graph, [
+    ...events,
+    { ...events[0], id: "later" },
+  ]);
+  assert.equal(groups.get("e2").length, 4);
+  assert.deepEqual(
+    appended.get("e2").map((event) => event.id),
+    ["c0", "c1", "c2", "c3", "later"],
+  );
+});
+
+test("左右端口的压缩徽标始终在卡片上方，紧凑和拖拽后不遮挡卡片", () => {
+  for (const height of [96, 108]) {
+    for (const [sourceY, targetY] of [
+      [200, 200],
+      [200, 260],
+      [260, 200],
+    ]) {
+      for (const [sourcePosition, targetPosition] of [
+        ["right", "left"],
+        ["left", "right"],
+      ]) {
+        const edge = { sourceY, targetY, sourcePosition, targetPosition };
+        const center = { x: 300, y: (sourceY + targetY) / 2 };
+        const marker = compactionMarkerPosition(edge, center, height);
+        assert.equal(marker.x, center.x);
+        assert.equal(marker.y, Math.min(sourceY, targetY) - height / 2 - 18);
+        // The marker is 26px tall; its bottom remains 5px above either card.
+        assert.ok(marker.y + 13 < sourceY - height / 2);
+        assert.ok(marker.y + 13 < targetY - height / 2);
+        assert.deepEqual(center, { x: 300, y: (sourceY + targetY) / 2 });
+      }
+    }
+  }
+});
+
+test("上下端口的压缩徽标保留原边中点，不改变蛇形转折位置", () => {
+  const center = { x: 380, y: 320 };
+  for (const [sourcePosition, targetPosition] of [
+    ["bottom", "top"],
+    ["top", "bottom"],
+  ]) {
+    assert.equal(
+      compactionMarkerPosition(
+        { sourceY: 280, targetY: 360, sourcePosition, targetPosition },
+        center,
+        96,
+      ),
+      center,
+    );
+  }
 });

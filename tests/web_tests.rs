@@ -1870,3 +1870,78 @@ fn explicit_external_session_can_be_favorited_without_source_writes() {
     assert_eq!(graph["favorite"], true);
     assert_eq!(graph["nodes"][0]["favorite"], true);
 }
+
+#[test]
+fn compaction_mirrors_across_live_batches_keep_graph_and_summary_counts_stable() {
+    let root = TempDir::new().unwrap();
+    let initial = [
+        meta("compaction-mirrors"),
+        json!({"type":"turn_context","payload":{"turn_id":"turn-a"}}),
+        user("Synthetic long task"),
+        json!({"timestamp":"2026-09-17T10:00:00.661Z","type":"compacted","payload":{}}),
+    ];
+    let source = fixture(root.path(), "compaction-mirrors", &initial);
+    let server = Server::start(root, &[]);
+    let key = server.key("compaction-mirrors");
+    let graph_path = format!("/api/trail/session/{key}");
+    let first = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["events"].as_array().is_some_and(|e| e.len() == 1)
+    });
+    let event_id = first["events"][0]["id"].clone();
+    assert_eq!(first["events"][0]["trigger"], "unknown");
+    server.wait("/api/sessions", |v| {
+        v["sessions"][0]["compaction_count"] == 1
+    });
+
+    // Match the observed record shape and 19 ms gap without using any source content.
+    let mirrors = [
+        json!({"timestamp":"2026-09-17T10:00:00.665Z","type":"world_state","payload":{}}),
+        json!({"timestamp":"2026-09-17T10:00:00.665Z","type":"turn_context","payload":{"turn_id":"turn-a"}}),
+        json!({"timestamp":"2026-09-17T10:00:00.666Z","type":"event_msg","payload":{"type":"thread_settings_applied"}}),
+        json!({"timestamp":"2026-09-17T10:00:00.678Z","type":"event_msg","payload":{"type":"token_count"}}),
+        json!({"timestamp":"2026-09-17T10:00:00.680Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-a","item":{"type":"ContextCompaction","id":"compact-a","trigger":"manual"}}}),
+    ];
+    OpenOptions::new()
+        .append(true)
+        .open(&source)
+        .unwrap()
+        .write_all(lines(&mirrors).as_bytes())
+        .unwrap();
+    let after = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["revision"].as_u64() > first["revision"].as_u64()
+    });
+    assert_eq!(after["events"].as_array().unwrap().len(), 1);
+    assert_eq!(after["events"][0]["id"], event_id);
+    assert_eq!(after["events"][0]["trigger"], "manual");
+    assert_eq!(
+        server.get("/api/sessions").json()["sessions"][0]["compaction_count"],
+        1
+    );
+
+    let another = [
+        json!({"timestamp":"2026-09-17T10:00:00.900Z","type":"compacted","payload":{}}),
+        json!({"timestamp":"2026-09-17T10:00:00.919Z","type":"event_msg","payload":{"type":"item_completed","turn_id":"turn-a","item":{"type":"ContextCompaction","id":"compact-b"}}}),
+        json!({"type":"turn_context","payload":{"turn_id":"turn-b"}}),
+        user("Next synthetic question"),
+    ];
+    OpenOptions::new()
+        .append(true)
+        .open(&source)
+        .unwrap()
+        .write_all(lines(&another).as_bytes())
+        .unwrap();
+    let second = server.wait(&graph_path, |v| {
+        v["loading"] == false && v["nodes"].as_array().is_some_and(|n| n.len() == 2)
+    });
+    assert_eq!(second["events"].as_array().unwrap().len(), 2);
+    assert_eq!(second["events"][0]["turn_index"], 0);
+    assert_eq!(second["events"][1]["turn_index"], 0);
+    assert_eq!(second["edges"].as_array().unwrap().len(), 1);
+    server.wait("/api/sessions", |v| {
+        v["sessions"][0]["compaction_count"] == 2
+    });
+    assert_eq!(
+        fs::read_to_string(source).unwrap(),
+        lines(&initial) + &lines(&mirrors) + &lines(&another)
+    );
+}

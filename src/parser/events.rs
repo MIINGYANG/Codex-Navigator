@@ -23,10 +23,10 @@ struct Command {
 }
 
 struct CompactionMirror {
-    source: String,
-    turn: Option<usize>,
-    timestamp: Option<String>,
-    sequence: usize,
+    sources: u8,
+    turn: usize,
+    timestamp: chrono::DateTime<chrono::FixedOffset>,
+    event_index: usize,
     id: Option<String>,
 }
 
@@ -37,19 +37,34 @@ pub(super) struct Events {
     order: VecDeque<String>,
     seen: HashSet<String>,
     last_compaction: Option<CompactionMirror>,
+    compaction_ids: HashMap<String, usize>,
+    last_sequence: usize,
     cwd: Option<String>,
+}
+
+fn enrich_compaction(event: &mut SessionEvent, source: &str, trigger: &str) {
+    if event.trigger.as_deref() == Some("unknown") && trigger != "unknown" {
+        event.trigger = Some(trigger.into());
+        event.source = source.into();
+    }
 }
 
 impl Events {
     pub fn observe(&mut self, v: &Value, active: Option<usize>, seq: usize, session: &mut Session) {
+        // Malformed, oversized and blank records do not reach observe. Treat gaps
+        // conservatively: their contents cannot establish an uninterrupted mirror.
+        if self.last_sequence.checked_add(1) != Some(seq) {
+            self.last_compaction = None;
+        }
+        self.last_sequence = seq;
         let outer = string(v, "type");
         let p = v.get("payload").unwrap_or(v);
         let kind = string(p, "type");
-        let time = v
+        let parsed_time = v
             .get("timestamp")
             .and_then(Value::as_str)
-            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            .map(|t| t.to_rfc3339());
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+        let time = parsed_time.map(|t| t.to_rfc3339());
         let explicit_turn = p
             .get("turn_id")
             .or_else(|| p.get("turnId"))
@@ -67,10 +82,6 @@ impl Events {
                 self.cwd = Some(cwd);
             }
         }
-        let cwd = self
-            .cwd
-            .as_deref()
-            .or_else(|| session.meta.cwd.as_ref().and_then(|p| p.to_str()));
         let compact = if outer == "compacted" {
             Some((p, "compacted"))
         } else if matches!(
@@ -95,9 +106,6 @@ impl Events {
                 turn.or_else(|| session.latest_active())
             };
             let id = field(item, "id", 256).map(|id| format!("compaction:{id}"));
-            if id.as_ref().is_some_and(|id| self.seen.contains(id)) {
-                return;
-            }
             let trigger = match item
                 .get("trigger")
                 .or_else(|| item.get("source"))
@@ -107,46 +115,60 @@ impl Events {
                 Some("manual") => "manual",
                 _ => "unknown",
             };
-            // Persisted compacted and context_compacted may mirror one operation.
-            if self.last_compaction.as_ref().is_some_and(|previous| {
-                previous.source != source
-                    && previous.turn == turn
-                    && time.is_some()
-                    && previous.timestamp == time
-                    && (id.is_none() || previous.id.is_none())
-                    && seq.saturating_sub(previous.sequence) <= 3
-            }) {
-                if let Some(previous) = &self.last_compaction {
-                    let key = previous
-                        .id
-                        .clone()
-                        .unwrap_or_else(|| format!("compaction:{}", previous.sequence));
-                    if let Some(event) = session.events.iter_mut().find(|event| event.id == key) {
-                        if event.trigger.as_deref() == Some("unknown") && trigger != "unknown" {
-                            event.trigger = Some(trigger.into());
-                            event.source = source.into();
-                        }
-                    }
-                }
-                if let Some(id) = id {
-                    if self.seen.len() < 2 * MAX_EVENTS {
-                        self.seen.insert(id);
-                    }
+            let source_bit = match source {
+                "compacted" => 1,
+                "item_completed" => 4,
+                _ => 2, // Normalize context_compacted spelling aliases.
+            };
+            if let Some(&index) = id.as_ref().and_then(|id| self.compaction_ids.get(id)) {
+                enrich_compaction(&mut session.events[index], source, trigger);
+                if let Some(previous) = self
+                    .last_compaction
+                    .as_mut()
+                    .filter(|p| p.event_index == index && turn == Some(p.turn))
+                {
+                    previous.sources |= source_bit;
+                } else {
+                    self.last_compaction = None;
                 }
                 return;
             }
-            self.last_compaction = Some(CompactionMirror {
-                source: source.to_owned(),
-                turn,
-                timestamp: time.clone(),
-                sequence: seq,
-                id: id.clone(),
+            // One operation can emit several complementary records, separated by
+            // metadata and small timestamp differences. Never use proximity alone.
+            let mirror = self.last_compaction.as_ref().is_some_and(|previous| {
+                previous.sources & source_bit == 0
+                    && turn == Some(previous.turn)
+                    && parsed_time.is_some_and(|time| {
+                        let elapsed = time.signed_duration_since(previous.timestamp);
+                        elapsed >= chrono::Duration::zero()
+                            && elapsed <= chrono::Duration::seconds(1)
+                    })
+                    && (id.is_none() || previous.id.is_none() || previous.id == id)
+                    && session
+                        .events
+                        .get(previous.event_index)
+                        .is_some_and(|event| {
+                            let prior = event.trigger.as_deref().unwrap_or("unknown");
+                            prior == "unknown" || trigger == "unknown" || prior == trigger
+                        })
             });
-            let id = id.unwrap_or_else(|| format!("compaction:{seq}"));
+            if mirror {
+                let previous = self.last_compaction.as_mut().unwrap();
+                enrich_compaction(&mut session.events[previous.event_index], source, trigger);
+                previous.sources |= source_bit;
+                if let Some(id) = id {
+                    // Each stored event acquires at most one explicit identity.
+                    self.compaction_ids.insert(id.clone(), previous.event_index);
+                    previous.id = Some(id);
+                }
+                return;
+            }
+            let event_index = session.events.len();
+            self.last_compaction = None;
             self.push(
                 session,
                 SessionEvent {
-                    id,
+                    id: id.clone().unwrap_or_else(|| format!("compaction:{seq}")),
                     kind: "compaction".into(),
                     turn_index: turn,
                     timestamp: time,
@@ -155,8 +177,41 @@ impl Events {
                     ..SessionEvent::default()
                 },
             );
+            if session.events.len() > event_index {
+                if let Some(id) = &id {
+                    self.compaction_ids.insert(id.clone(), event_index);
+                }
+                if let (Some(turn), Some(timestamp)) = (turn, parsed_time) {
+                    self.last_compaction = Some(CompactionMirror {
+                        sources: source_bit,
+                        turn,
+                        timestamp,
+                        event_index,
+                        id,
+                    });
+                }
+            }
             return;
         }
+        let metadata = matches!(outer, "world_state" | "turn_context" | "token_usage_record")
+            || (outer == "event_msg" && matches!(kind, "thread_settings_applied" | "token_count"));
+        let context_turn = if explicit_turn.is_some() {
+            turn
+        } else {
+            turn.or_else(|| session.latest_active())
+        };
+        if !metadata
+            || self
+                .last_compaction
+                .as_ref()
+                .is_some_and(|previous| context_turn != Some(previous.turn))
+        {
+            self.last_compaction = None;
+        }
+        let cwd = self
+            .cwd
+            .as_deref()
+            .or_else(|| session.meta.cwd.as_ref().and_then(|p| p.to_str()));
         if outer == "response_item" && matches!(kind, "function_call" | "custom_tool_call") {
             let id = string(p, "call_id");
             if id.is_empty() || id.len() > 256 {

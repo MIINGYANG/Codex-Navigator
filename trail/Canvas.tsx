@@ -43,6 +43,7 @@ import {
 import {
   DEFAULT_LAYOUT,
   compactionEdges,
+  compactionMarkerPosition,
   layoutMetrics,
   edgePorts,
   highlightedPath,
@@ -81,6 +82,7 @@ export interface CanvasProps {
   events?: SessionEvent[];
   onToggleFavorite?(node: QuestionNode): void;
   onEventSelect?(event: SessionEvent): void;
+  onCompactionGroupSelect?(edgeId: string, label: string): void;
 }
 type CardData = QuestionNode &
   Record<string, unknown> & {
@@ -100,7 +102,9 @@ type TrailEdge = Edge<
     active: boolean;
     label: string;
     events: SessionEvent[];
+    nodeHeight: number;
     onEventSelect?: (event: SessionEvent) => void;
+    onCompactionGroupSelect?: (edgeId: string, label: string) => void;
   },
   "trail"
 >;
@@ -215,6 +219,21 @@ const TrailConnection = memo(function TrailConnection(
   props: EdgeProps<TrailEdge>,
 ) {
   const [path, labelX, labelY] = getBezierPath(props);
+  const marker = compactionMarkerPosition(
+    props,
+    { x: labelX, y: labelY },
+    props.data?.nodeHeight ?? 108,
+  );
+  const events = props.data?.events ?? [];
+  const firstEvent = events[0];
+  const grouped = events.length > 1;
+  const label = grouped
+    ? `压缩记录 ×${events.length}`
+    : firstEvent?.trigger === "auto"
+      ? "自动压缩"
+      : firstEvent?.trigger === "manual"
+        ? "手动压缩"
+        : "压缩 · 未知";
   return (
     <>
       <BaseEdge
@@ -225,34 +244,48 @@ const TrailConnection = memo(function TrailConnection(
         markerEnd={props.markerEnd}
         className={`qt-connection${props.data?.branch ? " is-branch" : " is-sequence"}`}
       />
+      {!!events.length && marker.y !== labelY && (
+        <path
+          className="qt-compaction-leader"
+          d={`M ${labelX} ${labelY} L ${marker.x} ${marker.y + 13}`}
+          aria-hidden="true"
+        />
+      )}
       {!!props.data?.events.length && (
         <EdgeLabelRenderer>
           <div
             className="qt-compaction-group nodrag nopan"
             style={{
-              transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,
+              transform: `translate(-50%, -50%) translate(${marker.x}px,${marker.y}px)`,
             }}
           >
-            {props.data.events.map((event) => (
-              <button
-                key={event.id}
-                className="qt-compaction-marker"
-                title={`${event.trigger === "auto" ? "自动压缩" : event.trigger === "manual" ? "手动压缩" : "压缩 · 触发方式未知"} · ${timestamp(event.timestamp)}`}
-                aria-label={`查看${event.trigger === "auto" ? "自动" : event.trigger === "manual" ? "手动" : "未知来源"}压缩详情`}
-                onClick={(click) => {
-                  click.stopPropagation();
-                  props.data?.onEventSelect?.(event);
-                }}
-                onDoubleClick={(click) => click.stopPropagation()}
-              >
-                <Minimize2 size={12} />
-                {event.trigger === "auto"
-                  ? "自动压缩"
-                  : event.trigger === "manual"
-                    ? "手动压缩"
-                    : "压缩 · 未知"}
-              </button>
-            ))}
+            <button
+              className="qt-compaction-marker"
+              title={
+                grouped
+                  ? `${props.data.label} · ${events.length} 条压缩记录，点击逐条查看`
+                  : `${label} · ${timestamp(firstEvent.timestamp)}`
+              }
+              aria-label={
+                grouped
+                  ? `查看 ${props.data.label} 的 ${events.length} 条压缩记录`
+                  : `查看${firstEvent.trigger === "auto" ? "自动" : firstEvent.trigger === "manual" ? "手动" : "未知来源"}压缩详情`
+              }
+              aria-haspopup={grouped ? "dialog" : undefined}
+              onClick={(click) => {
+                click.stopPropagation();
+                if (grouped)
+                  props.data?.onCompactionGroupSelect?.(
+                    props.id,
+                    props.data.label,
+                  );
+                else props.data?.onEventSelect?.(firstEvent);
+              }}
+              onDoubleClick={(click) => click.stopPropagation()}
+            >
+              <Minimize2 size={12} />
+              {label}
+            </button>
           </div>
         </EdgeLabelRenderer>
       )}
@@ -289,6 +322,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     events = [],
     onToggleFavorite,
     onEventSelect,
+    onCompactionGroupSelect,
   },
   ref,
 ) {
@@ -296,8 +330,10 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
   const flow = useReactFlow<CardNode, TrailEdge>();
   const favoriteCallback = useRef(onToggleFavorite);
   const eventCallback = useRef(onEventSelect);
+  const groupCallback = useRef(onCompactionGroupSelect);
   favoriteCallback.current = onToggleFavorite;
   eventCallback.current = onEventSelect;
+  groupCallback.current = onCompactionGroupSelect;
   const favoriteEnabled = Boolean(onToggleFavorite);
   const toggleFavorite = useCallback(
     (node: QuestionNode) => favoriteCallback.current?.(node),
@@ -305,6 +341,11 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
   );
   const selectEvent = useCallback(
     (event: SessionEvent) => eventCallback.current?.(event),
+    [],
+  );
+
+  const selectCompactionGroup = useCallback(
+    (edgeId: string, label: string) => groupCallback.current?.(edgeId, label),
     [],
   );
 
@@ -654,7 +695,9 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
         selectable: false,
         data: {
           events: edgeEvents.get(edge.id) ?? [],
+          nodeHeight: metrics.height,
           onEventSelect: selectEvent,
+          onCompactionGroupSelect: selectCompactionGroup,
           branch: edge.type === "branch",
           active,
           label: `Q${graphIndex.nodes.get(edge.source)?.ordinal} → Q${graphIndex.nodes.get(edge.target)?.ordinal}`,
@@ -680,7 +723,9 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     focusPath,
     selectedId,
     edgeEvents,
+    metrics.height,
     selectEvent,
+    selectCompactionGroup,
   ]);
   const tooltipNode = tooltip ? graphIndex.nodes.get(tooltip.id) : null;
   const parents = tooltipNode

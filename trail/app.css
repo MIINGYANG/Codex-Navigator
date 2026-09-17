@@ -1940,6 +1940,17 @@ input[type="checkbox"] {
   align-self: flex-start;
   margin: 0 22px 12px;
 }
+.events-scope-summary {
+  padding: 0 22px 14px;
+  color: var(--qt-body-text);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.events-scope-summary p {
+  margin: 5px 0 0;
+  color: var(--qt-muted);
+  font-size: 11px;
+}
 .events-list {
   padding: 0 14px 14px;
   overflow-y: auto;

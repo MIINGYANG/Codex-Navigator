@@ -177,7 +177,9 @@ async function launch(launcher, url, width) {
 
 const record = (type, payload, seconds = 0) =>
   JSON.stringify({
-    timestamp: new Date(Date.UTC(2026, 8, 17, 9, 0, seconds)).toISOString(),
+    timestamp: new Date(
+      Date.UTC(2026, 8, 17, 9, 0, 0) + seconds * 1000,
+    ).toISOString(),
     type,
     payload,
   }) + "\n";
@@ -270,6 +272,22 @@ async function closeSidebar(target) {
   )
     await click(target, selector);
 }
+async function settleViewport(target) {
+  assert.ok(
+    await evaluate(
+      target,
+      "(async()=>{let previous='',stable=0;const until=Date.now()+4000;while(Date.now()<until){await new Promise(resolve=>setTimeout(resolve,100));const current=document.querySelector('.react-flow__viewport')?.style.transform;if(current&&current===previous)stable++;else stable=0;previous=current;if(stable===3)return true}return false})()",
+    ),
+    "等待前序定位动画结束后比较视口",
+  );
+}
+async function markersClearCards(target) {
+  await wait(
+    target,
+    "(()=>{const markers=[...document.querySelectorAll('.qt-compaction-marker')];const cards=[...document.querySelectorAll('.qt-card')].map(e=>e.getBoundingClientRect());return markers.length>0&&markers.every(e=>{const r=e.getBoundingClientRect();return cards.every(c=>Math.min(r.right,c.right)<=Math.max(r.left,c.left)||Math.min(r.bottom,c.bottom)<=Math.max(r.top,c.top))})})()",
+    "压缩标记矩形与任何问题卡片均不重叠",
+  );
+}
 async function openEvents(target) {
   await evaluate(
     target,
@@ -351,7 +369,21 @@ try {
             "[main abc1234] demo\n 1 file changed",
             22,
           ) + command("tag", "git tag v3.1.0 abc1234", "", 25);
-      if (number === 3) source += record("compacted", { trigger: "auto" }, 33);
+      if (number === 3)
+        source +=
+          record("compacted", { trigger: "auto" }, 33) +
+          record("world_state", {}, 33.004) +
+          record("token_usage_record", {}, 33.004) +
+          record("event_msg", { type: "thread_settings_applied" }, 33.005) +
+          record("event_msg", { type: "token_count" }, 33.017) +
+          record(
+            "event_msg",
+            {
+              type: "item_completed",
+              item: { type: "ContextCompaction", id: "auto-mirror" },
+            },
+            33.019,
+          );
       if (number === 5)
         source += command(
           "commit-no-version",
@@ -360,7 +392,12 @@ try {
           52,
         );
       if (number === 6)
-        source += record("compacted", { trigger: "manual" }, 63);
+        for (let i = 0; i < 4; i++)
+          source += record(
+            "compacted",
+            { id: `manual-${i}`, trigger: "manual" },
+            63 + i,
+          );
       if (number === 12) source += record("compacted", {}, 123);
     }
     const sourcePath = path.join(
@@ -417,6 +454,7 @@ try {
       "document.querySelectorAll('.qt-card-commit').length===2&&document.querySelectorAll('.qt-compaction-marker').length===2",
       "提交与可关联压缩标识",
     );
+    await markersClearCards(target);
 
     await click(target, '[data-question-id="q2"]');
     await pause(400);
@@ -444,6 +482,7 @@ try {
       loose,
       "密度改变坐标而非缩小整个画布",
     );
+    await markersClearCards(target);
     await picture(target, root, "compact-selected.png");
     console.log(
       "所选节点几何",
@@ -569,6 +608,104 @@ try {
       await closeDetail(target);
     }
 
+    await evaluate(
+      target,
+      "(()=>{const b=[...document.querySelectorAll('.qt-compaction-marker')].find(e=>e.textContent.includes('自动压缩'));if(!b)throw new Error('缺少单条标记');b.click();return true})()",
+    );
+    await wait(
+      target,
+      "!!document.querySelector('.event-detail')&&!document.querySelector('dialog[open]')",
+      "单条压缩直接打开详情",
+    );
+    await closeDetail(target);
+    await markersClearCards(target);
+    await settleViewport(target);
+    const beforeMarkerKeyboard = await view(target);
+    assert.ok(
+      await evaluate(
+        target,
+        "(()=>{const b=document.querySelector('.qt-compaction-marker[aria-haspopup=dialog]');b.focus({preventScroll:true});const e=new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true});b.dispatchEvent(e);b.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true}));return document.activeElement===b&&!e.defaultPrevented})()",
+      ),
+      "分组标记支持键盘聚焦且Enter未被节点导航吞掉",
+    );
+    await settleViewport(target);
+    assert.deepEqual(
+      await view(target),
+      beforeMarkerKeyboard,
+      "分组按钮双击不触发节点聚焦或视口变化",
+    );
+    const openGroup = async () => {
+      await evaluate(
+        target,
+        "(()=>{const b=[...document.querySelectorAll('.qt-compaction-marker')].find(e=>e.textContent.includes('压缩记录 ×4'));if(!b)throw new Error('缺少聚合标记');b.click();return true})()",
+      );
+      await wait(
+        target,
+        "!!document.querySelector('dialog[aria-label=\"压缩记录\"][open]')",
+        "同边多条打开分组列表",
+      );
+    };
+    await openGroup();
+    assert.equal(
+      await evaluate(
+        target,
+        "document.querySelectorAll('.qt-compaction-group').length",
+      ),
+      2,
+      "同边四条仍只有一个连线标记",
+    );
+    assert.equal(
+      await evaluate(
+        target,
+        "document.querySelectorAll('.session-event-row').length",
+      ),
+      4,
+      "分组只展示四条关联压缩",
+    );
+    assert.ok(
+      await evaluate(
+        target,
+        "document.querySelector('.events-scope-summary').innerText.includes('Q6 → Q7')",
+      ),
+      "分组清楚标明所在线段",
+    );
+    assert.equal(
+      await evaluate(
+        target,
+        "new Set([...document.querySelectorAll('.session-event-row small')].map(e=>e.textContent)).size",
+      ),
+      4,
+      "保留每条事件的不同时间",
+    );
+    await picture(target, root, "compaction-group.png");
+    await click(target, ".session-event-row:nth-child(2)");
+    await wait(
+      target,
+      "document.querySelector('.event-detail')?.innerText.includes('Q6')",
+      "逐条进入既有事件详情",
+    );
+    await closeDetail(target);
+    await openEvents(target);
+    assert.equal(
+      await evaluate(
+        target,
+        "document.querySelectorAll('.session-event-row').length",
+      ),
+      8,
+      "全部事件入口不沿用分组筛选",
+    );
+    await click(target, '[aria-label="关闭会话事件"]');
+    await openGroup();
+    await evaluate(
+      target,
+      "(()=>{document.querySelector('dialog[open]').dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));return true})()",
+    );
+    await wait(
+      target,
+      "!document.querySelector('dialog[open]')",
+      "Escape 关闭分组列表",
+    );
+
     await sidebar(target);
     await buttonText(target, ".session-filters", "收藏");
     await wait(
@@ -617,6 +754,7 @@ try {
       "(()=>{const e=document.querySelector('select[aria-label=\"主题\"]');e.value='dark';e.dispatchEvent(new Event('change',{bubbles:true}));return true})()",
     );
     await pause(400);
+    await markersClearCards(target);
     await picture(target, root, "canvas-dark.png");
     await evaluate(
       target,

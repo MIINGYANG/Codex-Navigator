@@ -118,7 +118,9 @@ export function EventsDialog({
   onChoose,
   onClose,
   loading,
+  scopeLabel,
 }: {
+  scopeLabel?: string;
   events: SessionEvent[];
   onChoose(event: SessionEvent): void;
   onClose(): void;
@@ -137,7 +139,7 @@ export function EventsDialog({
     <dialog
       ref={dialog}
       className="search-dialog session-events-dialog"
-      aria-label="会话事件"
+      aria-label={scopeLabel ? "压缩记录" : "会话事件"}
       onCancel={(event) => {
         event.preventDefault();
         onClose();
@@ -149,7 +151,7 @@ export function EventsDialog({
       <div className="search-dialog-inner">
         <header className="events-dialog-header">
           <Clock size={18} />
-          <h2>会话事件</h2>
+          <h2>{scopeLabel ? "压缩记录" : "会话事件"}</h2>
           <button
             className="icon-button"
             aria-label="关闭会话事件"
@@ -158,29 +160,40 @@ export function EventsDialog({
             <X size={18} />
           </button>
         </header>
-        <div className="events-filters" role="group" aria-label="事件类型">
-          {(
-            [
-              ["all", "全部"],
-              ["commit", "提交"],
-              ["compaction", "压缩"],
-            ] as const
-          ).map(([value, label]) => (
-            <button
-              key={value}
-              aria-pressed={filter === value}
-              onClick={() => {
-                setFilter(value);
-                setLimit(100);
-              }}
-            >
-              {label}{" "}
-              {value === "all"
-                ? events.length
-                : events.filter((e) => e.kind === value).length}
-            </button>
-          ))}
-        </div>
+        {scopeLabel ? (
+          <div className="events-scope-summary">
+            <strong>
+              {scopeLabel} · {events.length} 条记录
+            </strong>
+            <p>
+              逐条查看时间与来源。此处统计事件记录，不据此推断实际压缩次数。
+            </p>
+          </div>
+        ) : (
+          <div className="events-filters" role="group" aria-label="事件类型">
+            {(
+              [
+                ["all", "全部"],
+                ["commit", "提交"],
+                ["compaction", "压缩"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                aria-pressed={filter === value}
+                onClick={() => {
+                  setFilter(value);
+                  setLimit(100);
+                }}
+              >
+                {label}{" "}
+                {value === "all"
+                  ? events.length
+                  : events.filter((e) => e.kind === value).length}
+              </button>
+            ))}
+          </div>
+        )}
         <div className="events-list">
           {visible.slice(0, limit).map((event) => (
             <button

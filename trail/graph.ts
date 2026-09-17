@@ -166,6 +166,28 @@ export function compactionEdges(
 }
 
 export type PortSide = "top" | "bottom" | "left" | "right";
+/** Keep horizontal markers above the cards, even in the narrow compact gap. */
+export function compactionMarkerPosition(
+  edge: {
+    sourceY: number;
+    targetY: number;
+    sourcePosition: PortSide;
+    targetPosition: PortSide;
+  },
+  center: Position,
+  nodeHeight: number,
+): Position {
+  const horizontal =
+    (edge.sourcePosition === "left" || edge.sourcePosition === "right") &&
+    (edge.targetPosition === "left" || edge.targetPosition === "right");
+  return horizontal
+    ? {
+        x: center.x,
+        y: Math.min(edge.sourceY, edge.targetY) - nodeHeight / 2 - 18,
+      }
+    : center;
+}
+
 export function edgePorts(
   source: Position,
   target: Position,

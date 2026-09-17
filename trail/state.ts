@@ -145,3 +145,26 @@ export function initialLoadTransition(
     previousGeneration !== generation;
   return { resetSeen, initializing: resetSeen && loading };
 }
+
+/** A scoped dialog belongs to one session generation and one recorded edge. */
+export type EventView =
+  | "all"
+  | {
+      key: string;
+      generation: number;
+      edgeId: string;
+      label: string;
+    }
+  | null;
+
+export function reconcileEventView(
+  view: EventView,
+  next: { key: string; generation: number; edges: { id: string }[] },
+): EventView {
+  if (!view || view === "all") return view;
+  return view.key === next.key &&
+    view.generation === next.generation &&
+    next.edges.some((edge) => edge.id === view.edgeId)
+    ? view
+    : null;
+}

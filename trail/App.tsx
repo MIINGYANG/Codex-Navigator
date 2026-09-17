@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -43,11 +43,14 @@ import type {
   SessionEvent,
   CanvasLayout,
 } from "./graph";
+import { compactionEdges } from "./graph";
 import { api, subscribe, saveFavorite } from "./api";
 import { EventDetail, EventsDialog } from "./SessionEvents";
 import {
   fullTime,
   groupResults,
+  reconcileEventView,
+  type EventView,
   reconcileSelection,
   reconcileSessions,
   initialLoadTransition,
@@ -153,7 +156,8 @@ export default function App() {
   const [favoriteFirst, setFavoriteFirst] = useState(false);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [showCompactions, setShowCompactions] = useState(true);
-  const [eventsOpen, setEventsOpen] = useState(false);
+  const [eventsView, setEventsView] = useState<EventView>(null);
+  const eventsOpen = eventsView !== null;
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
   const [favoritesError, setFavoritesError] = useState("");
   const [favoriteBusy, setFavoriteBusy] = useState<Set<string>>(new Set());
@@ -178,6 +182,20 @@ export default function App() {
   const selectedEvent =
     graph?.events?.find((event) => event.id === selectedEventId) || null;
   const sessionEvents = graph?.events || [];
+  const eventScope = eventsView && eventsView !== "all" ? eventsView : null;
+  const dialogEvents = useMemo(
+    () =>
+      eventScope
+        ? graph &&
+          eventScope.key === key &&
+          eventScope.generation === graph.generation
+          ? (compactionEdges(graph, graph.events ?? []).get(
+              eventScope.edgeId,
+            ) ?? [])
+          : []
+        : (graph?.events ?? []),
+    [graph, key, eventScope],
+  );
   const lastCommit = sessionEvents
     .filter((event) => event.kind === "commit")
     .at(-1);
@@ -318,7 +336,7 @@ export default function App() {
     setGraphError("");
     setSelectedId(null);
     setSelectedEventId(null);
-    setEventsOpen(false);
+    setEventsView(null);
     setFocusPath(false);
     setSeen(0);
     setConnected(false);
@@ -372,6 +390,7 @@ export default function App() {
         if (changed) {
           graphRef.current = next;
           setGraph(next);
+          setEventsView((view) => reconcileEventView(view, next));
           setSelectedEventId((value) =>
             previous && previous.generation !== next.generation
               ? null
@@ -460,7 +479,7 @@ export default function App() {
   const closeOverlays = useCallback(() => {
     if (sessionAction) return;
     if (searchOpen) setSearchOpen(false);
-    else if (eventsOpen) setEventsOpen(false);
+    else if (eventsOpen) setEventsView(null);
     else if (sidebarOpen) setSidebarOpen(false);
     else if (selectedEventId) setSelectedEventId(null);
     else if (selectedId) {
@@ -578,7 +597,7 @@ export default function App() {
   }
 
   const chooseEvent = useCallback((event: SessionEvent) => {
-    setEventsOpen(false);
+    setEventsView(null);
     setSelectedEventId(event.id);
     setExpanded(false);
     const node = graphRef.current?.nodes.find(
@@ -588,6 +607,17 @@ export default function App() {
       setSelectedId(node.id);
       requestAnimationFrame(() => canvas.current?.focus(node.id));
     }
+  }, []);
+
+  const chooseCompactionGroup = useCallback((edgeId: string, label: string) => {
+    const current = graphRef.current;
+    if (!current) return;
+    setEventsView({
+      key: current.key,
+      generation: current.generation,
+      edgeId,
+      label,
+    });
   }, []);
 
   function manage(session: SessionTarget, action: SessionAction) {
@@ -1094,7 +1124,7 @@ export default function App() {
                   星标问题{" "}
                   {graph?.nodes.filter((node) => node.favorite).length || 0}
                 </button>
-                <button disabled={!graph} onClick={() => setEventsOpen(true)}>
+                <button disabled={!graph} onClick={() => setEventsView("all")}>
                   <Clock size={13} />
                   会话事件 {sessionEvents.length}
                 </button>
@@ -1153,6 +1183,7 @@ export default function App() {
                     if (key) void toggleFavorite(key, !node.favorite, node);
                   }}
                   onEventSelect={chooseEvent}
+                  onCompactionGroupSelect={chooseCompactionGroup}
                 />
               ) : graph?.loading ||
                 (key && !graph && !graphError) ||
@@ -1251,10 +1282,12 @@ export default function App() {
       )}
       {eventsOpen && (
         <EventsDialog
-          events={sessionEvents}
+          key={eventScope?.edgeId ?? "all"}
+          events={dialogEvents}
+          scopeLabel={eventScope?.label}
           loading={Boolean(graph?.loading)}
           onChoose={chooseEvent}
-          onClose={() => setEventsOpen(false)}
+          onClose={() => setEventsView(null)}
         />
       )}
       {sessionAction && (
