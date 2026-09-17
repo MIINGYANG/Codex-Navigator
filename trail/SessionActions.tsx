@@ -116,7 +116,10 @@ export default function SessionActionDialog({
           <code>{session.cwd || "项目路径未记录"}</code>
         </p>
         {trash ? (
-          <p>会话文件将移到系统回收站，可恢复。请先结束正在运行的该会话。</p>
+          <p>
+            会话文件将移到系统回收站，可恢复。如果其他会话仍引用它的历史，将阻止删除。
+            请先结束正在使用或创建相关分支的 Codex 进程。
+          </p>
         ) : (
           <label className="session-name-field">
             会话名称

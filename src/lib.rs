@@ -5,6 +5,7 @@ pub mod discovery;
 pub mod domain;
 mod favorites;
 pub mod index;
+mod lineage;
 mod management;
 pub mod parser;
 pub mod ui;

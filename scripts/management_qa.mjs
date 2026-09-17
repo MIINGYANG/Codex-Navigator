@@ -296,7 +296,7 @@ try {
         new Date(),
         new Date(Date.now() + (3 - index) * 60000),
       );
-      files.push({ path: file, title, cwd, hash: hash(text) });
+      files.push({ id, path: file, title, cwd, hash: hash(text) });
     }
     let running = await start(home, env);
     const target = await launch(launcher, running.url, width);
@@ -397,6 +397,42 @@ try {
     );
 
     await openAction(target, other.title, "删除");
+    const childId = randomUUID();
+    const archive = path.join(home, "archived_sessions");
+    await fs.mkdir(archive);
+    const childPath = path.join(archive, `rollout-${childId}.jsonl`);
+    await fs.writeFile(
+      childPath,
+      JSON.stringify({
+        type: "session_meta",
+        payload: {
+          id: childId,
+          history_mode: "paginated",
+          history_base: { thread_id: other.id },
+        },
+      }) + "\n",
+    );
+    await click(target, ".session-action-dialog button[type=submit]");
+    await wait(
+      target,
+      `document.querySelector('.session-action-error')?.textContent.includes(${JSON.stringify(childId)})`,
+      "归档分支引用来源时阻止删除并显示依赖 ID",
+    );
+    assert.equal(hash(await fs.readFile(other.path)), other.hash);
+    assert.equal(
+      await evaluate(
+        target,
+        "document.querySelectorAll('.session-item').length",
+      ),
+      3,
+      "删除受阻后保留列表",
+    );
+    await cdp(
+      `/screenshot?target=${target}&file=${encodeURIComponent(path.join(root, "trash-protected.png"))}`,
+    );
+    await click(target, ".session-action-dialog footer button[type=button]");
+    await fs.rename(childPath, path.join(root, "synthetic-child-backup.jsonl"));
+    await openAction(target, other.title, "删除");
     assert.ok(
       await evaluate(
         target,
@@ -476,7 +512,7 @@ try {
     tabs.delete(target);
     await stop(running.service);
     console.log(
-      `PASS ${width}px：改名持久化、搜索、XSS 纯文本、视口保护、三类删除与恢复。`,
+      `PASS ${width}px：来源依赖保护、改名持久化、搜索、XSS 纯文本、视口保护、三类删除与恢复。`,
     );
   }
 } finally {

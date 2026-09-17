@@ -266,7 +266,7 @@ dependencies = [
 
 [[package]]
 name = "codex-navigator"
-version = "3.2.0"
+version = "3.2.1"
 dependencies = [
  "anyhow",
  "arboard",
@@ -277,6 +277,7 @@ dependencies = [
  "directories",
  "futures-util",
  "getrandom 0.4.3",
+ "libc",
  "memchr",
  "notify",
  "ratatui",

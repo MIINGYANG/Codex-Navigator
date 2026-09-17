@@ -1520,6 +1520,56 @@ fn web_trash_removes_current_and_last_sessions_without_cache_or_discovery_reviva
 
 #[cfg(target_os = "linux")]
 #[test]
+fn web_trash_rejects_referenced_source_without_invoking_gio_and_allows_leaf() {
+    let root = TempDir::new().unwrap();
+    let source_id = "01994115-9c41-70b5-bc40-851e5edca011";
+    let child_id = "01994115-9c41-70b5-bc40-851e5edca012";
+    let source = fixture(root.path(), source_id, &[meta(source_id), user("source")]);
+    let mut child_meta = meta(child_id);
+    child_meta["payload"]["history_mode"] = json!("paginated");
+    child_meta["payload"]["history_base"] =
+        json!({"thread_id":source_id,"end_ordinal_exclusive":7,"end_byte_offset":34923});
+    let child = fixture(root.path(), child_id, &[child_meta, user("child")]);
+    let original = fs::read(&source).unwrap();
+    let child_original = fs::read(&child).unwrap();
+    management_commands(root.path());
+    let server = Server::start(root, &["--session", source.to_str().unwrap()]);
+    let key = server.key(source_id);
+    let response = server.post(
+        &format!("/api/session/{key}/trash"),
+        &json!({"confirm":true}),
+    );
+    assert!(response.status >= 400);
+    assert!(response.text().contains(child_id));
+    assert!(!server.root.path().join("gio-calls.jsonl").exists());
+    assert_eq!(fs::read(&source).unwrap(), original);
+    assert_eq!(fs::read(&child).unwrap(), child_original);
+    let key = server.key(child_id);
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/trash"),
+                &json!({"confirm":true})
+            )
+            .json()["trashed"],
+        true
+    );
+    assert_eq!(
+        fs::read(
+            server
+                .root
+                .path()
+                .join("data/Trash/files")
+                .join(child.file_name().unwrap())
+        )
+        .unwrap(),
+        child_original
+    );
+    assert_eq!(fs::read(source).unwrap(), original);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn web_management_rejects_external_paths_codex_path_mismatch_and_failed_trash() {
     let root = TempDir::new().unwrap();
     let id = "01994115-9c41-70b5-bc40-851e5edca005";

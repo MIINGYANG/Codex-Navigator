@@ -1,6 +1,6 @@
 [package]
 name = "codex-navigator"
-version = "3.2.0"
+version = "3.2.1"
 edition = "2021"
 rust-version = "1.88"
 description = "Local terminal and web navigator with explicit Codex session management"
@@ -24,6 +24,7 @@ clap = { version = "4.5", features = ["derive"] }
 crossterm = "0.28"
 directories = "6"
 getrandom = "0.4"
+libc = "0.2"
 futures-util = "0.3"
 memchr = "2"
 notify = "8"

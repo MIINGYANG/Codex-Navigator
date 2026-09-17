@@ -32,7 +32,7 @@ fn validated_name(name: &str) -> Result<&str> {
     Ok(name)
 }
 
-fn valid_id(id: &str) -> bool {
+pub(crate) fn valid_id(id: &str) -> bool {
     id.len() == 36
         && id.bytes().enumerate().all(|(i, b)| {
             if [8, 13, 18, 23].contains(&i) {
@@ -257,7 +257,10 @@ fn trash_with_command(
     mut command: Command,
     timeout: Duration,
 ) -> Result<()> {
-    target(home, path)?;
+    let home = home.canonicalize().context("无法确认 Codex 数据目录")?;
+    let path = target(&home, path)?;
+    crate::lineage::ensure_unreferenced(&home, &path)?;
+    target(&home, &path)?;
     let deadline = Instant::now() + timeout;
     let mut child = ManagedChild(
         command
@@ -292,11 +295,15 @@ mod tests {
 
     const ID: &str = "01992a54-1234-7000-8000-111111111111";
 
+    fn fixture_contents() -> String {
+        format!("{}\n", json!({"type":"session_meta","payload":{"id":ID}}))
+    }
+
     fn fixture() -> (TempDir, PathBuf) {
         let root = tempfile::tempdir().unwrap();
         fs::create_dir(root.path().join("sessions")).unwrap();
         let path = root.path().join("sessions/rollout.jsonl");
-        fs::write(&path, "synthetic\n").unwrap();
+        fs::write(&path, fixture_contents()).unwrap();
         (root, path)
     }
 
@@ -371,7 +378,7 @@ for line in sys.stdin:
             fs::read_to_string(root.path().join("name-set")).unwrap(),
             "新名称"
         );
-        assert_eq!(fs::read_to_string(path).unwrap(), "synthetic\n");
+        assert_eq!(fs::read_to_string(path).unwrap(), fixture_contents());
         assert_reaped(root.path());
     }
 
@@ -450,7 +457,28 @@ for line in sys.stdin:
             .arg(&path)
             .arg(&saved);
         trash_with_command(root.path(), &path, move_file, TIMEOUT).unwrap();
-        assert_eq!(fs::read_to_string(saved).unwrap(), "synthetic\n");
+        assert_eq!(fs::read_to_string(saved).unwrap(), fixture_contents());
+    }
+
+    #[test]
+    fn incomplete_dependency_scan_never_invokes_trash_or_changes_rollout() {
+        let (root, path) = fixture();
+        fs::write(
+            root.path().join("sessions/broken.jsonl"),
+            "invalid header\n",
+        )
+        .unwrap();
+        let invoked = root.path().join("trash-invoked");
+        let mut command = Command::new("python3");
+        command
+            .args([
+                "-c",
+                "import pathlib,sys; pathlib.Path(sys.argv[1]).write_text('invoked')",
+            ])
+            .arg(&invoked);
+        assert!(trash_with_command(root.path(), &path, command, TIMEOUT).is_err());
+        assert!(!invoked.exists());
+        assert_eq!(fs::read_to_string(path).unwrap(), fixture_contents());
     }
 
     #[test]

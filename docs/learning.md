@@ -209,3 +209,9 @@
 **Key insight:** 已验证的产品功能和探索性材料需要在README、CHANGELOG与Agent指南中一致区分。发布标签保留在功能提交，范围说明和推送验收以main文档提交追加，不为了补充说明移动标签。
 **Details / snippet:** 非强制原子推送main与v3.2.0，读回main为4175be3、版本标签解引用为e00db39；文档明确未实现自动采集、侧聊存档、手动导入或专用启动入口。应用代码未变，复用既有完整验收。
 **Tags:** #release #documentation #scope #git #verification
+
+## 2026-09-17 — 删除会话前必须保护分页来源文件
+**Question:** Web 改名或删除后，Codex 为什么报 missing source rollout，怎样修复？
+**Key insight:** Codex 0.153.2 隔离实测中官方改名不改变 rollout 字节；分页分支按 history_base.thread_id 引用原文件，移走来源能重现错误，恢复原文件即可恢复。系统回收站保证可恢复性，不保证依赖该文件的其他会话仍可运行；仅 forked_from_id 不构成文件依赖。
+**Details / snippet:** 3.2.1 删除前有界扫描 sessions/archived_sessions 首条元数据，纳入隐藏子会话，引用存在或检查不完整均拒绝；246项Rust、46项前端、14项诊断脚本测试及完整构建和1848/390px管理QA通过。诊断脚本只核对首行ID和回收站原路径，不输出正文或自动恢复；实际/home/lmy设备不可达，真实恢复仍待设备诊断结果。外部并发创建分支无法由Sidecar预检加锁排除。
+**Tags:** #codex #lineage #trash #recovery #regression #verification
