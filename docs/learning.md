@@ -227,3 +227,9 @@
 **Key insight:** Codex0.153.2同时有delete和archive；正式delete的本地实现包含fork历史引用扫描与拒绝删除错误，且官方文档说明它管理rollout、元数据和spawned descendants。旧Navigator只对单文件执行gio trash，绕过了这些约束；3.2.1补齐预检查，但代码提交未部署时不会保护旧服务。
 **Details / snippet:** 本次缺失的是中间来源01a0a5c7-e72d-72d3-84d3-332d99e98500。三层依赖与HTTP拒删两项合成回归通过；本机命令仍3.2.0，修复3.2.1尚未推送。目标设备版本和实际命令已询问，新的恢复结果未确认；未执行永久删除、未操作目标设备。文档补充版本核对与官方操作区别。
 **Tags:** #delete #archive #lineage #deployment #verification
+
+## 2026-09-17 — 目标设备仍运行未带保护的3.2.0
+**Question:** 用户提供Navigator3.2.0、Codex0.153.4和/delete后，怎样确认问题范围？
+**Key insight:** 版本输出确认目标设备尚未安装3.2.1，仍会直接将来源rollout移入回收站。用户终端执行的是真正/delete，不能改述为归档；本机0.153.2静态证据与用户0.153.4行为需分开表述。
+**Details / snippet:** 3.2.1保护已完成合成验收但尚未推送；再次缺失的中间来源恢复仍待用户确认。本轮只补版本证据，git diff --check通过，不重复应用测试。
+**Tags:** #version #deployment #delete #verification
