@@ -5,6 +5,7 @@ export default [
       "scripts/trail_qa.mjs",
       "scripts/management_qa.mjs",
       "scripts/features_qa.mjs",
+      "scripts/favorites_qa.mjs",
     ],
     languageOptions: {
       ecmaVersion: "latest",

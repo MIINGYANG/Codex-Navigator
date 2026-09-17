@@ -1731,6 +1731,9 @@ fn favorites_require_authenticated_origin_and_preserve_corrupt_store() {
         server.post(&endpoint, &json!({"favorite":true})).status,
         409
     );
+    let catalog = server.get("/api/trail/favorites").json();
+    assert!(catalog["error"].as_str().unwrap().contains("损坏"));
+    assert_eq!(catalog["results"], json!([]));
     assert_eq!(fs::read(store).unwrap(), b"invalid JSON");
 }
 
@@ -1865,6 +1868,11 @@ fn explicit_external_session_can_be_favorited_without_source_writes() {
             .status,
         200
     );
+    let catalog = server.wait("/api/trail/favorites", |v| v["loading"] == false);
+    assert_eq!(
+        catalog["results"][0]["favoriteId"],
+        graph["nodes"][0]["favorite_id"]
+    );
     assert_eq!(fs::read_to_string(external).unwrap(), original);
     let graph = server.get(&format!("/api/trail/session/{key}")).json();
     assert_eq!(graph["favorite"], true);
@@ -1944,4 +1952,123 @@ fn compaction_mirrors_across_live_batches_keep_graph_and_summary_counts_stable()
         fs::read_to_string(source).unwrap(),
         lines(&initial) + &lines(&mirrors) + &lines(&another)
     );
+}
+
+#[test]
+fn favorite_catalog_finds_old_questions_without_favoriting_parent_after_restart() {
+    let root = TempDir::new().unwrap();
+    fixture(root.path(), "recent", &[meta("recent"), user("Recent")]);
+    let old = fixture(
+        root.path(),
+        "old-favorite",
+        &[meta("old-favorite"), user("Old question to find")],
+    );
+    let old_dir = root.path().join("codex/sessions/2020/01/01");
+    fs::create_dir_all(&old_dir).unwrap();
+    let old_path = old_dir.join("rollout-old-favorite.jsonl");
+    fs::rename(&old, &old_path).unwrap();
+    let server = Server::start(root, &["--no-watch"]);
+    let listing = server.wait("/api/sessions?all=1", |v| v["loading"] == false);
+    let key = listing["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["id"] == "old-favorite")
+        .unwrap()["key"]
+        .as_str()
+        .unwrap();
+    let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+        v["loading"] == false
+    });
+    let identity = graph["nodes"][0]["favorite_id"].clone();
+    assert!(identity.is_string());
+    assert_eq!(
+        server
+            .post(
+                &format!("/api/session/{key}/favorite"),
+                &json!({"favorite":true,"node_id":"q1","generation":graph["generation"]})
+            )
+            .status,
+        200
+    );
+    assert_eq!(
+        server.get(&format!("/api/trail/session/{key}")).json()["favorite"],
+        false
+    );
+    let catalog = server.wait("/api/trail/favorites", |v| v["loading"] == false);
+    assert_eq!(catalog["results"].as_array().unwrap().len(), 1);
+    assert_eq!(catalog["results"][0]["favoriteId"], identity);
+    assert_eq!(catalog["results"][0]["cwd"], "/synthetic/project");
+    assert_eq!(
+        catalog["results"][0]["promptPreview"],
+        "Old question to find"
+    );
+    assert_eq!(catalog["unavailable"], json!([]));
+    let server = server.restart(&["--no-watch"]);
+    let catalog = server.wait("/api/trail/favorites", |v| v["loading"] == false);
+    assert_eq!(catalog["results"][0]["favoriteId"], identity);
+    let key = catalog["results"][0]["sessionKey"].as_str().unwrap();
+    let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+        v["loading"] == false
+    });
+    assert_eq!(graph["nodes"][0]["favorite_id"], identity);
+    // Disappearance remains visible as an unavailable saved item, never reusing q1.
+    fs::rename(
+        &old_path,
+        server.root.path().join("saved-outside-sessions.jsonl"),
+    )
+    .unwrap();
+    let catalog = server.get("/api/trail/favorites").json();
+    assert_eq!(catalog["results"], json!([]));
+    assert_eq!(catalog["unavailable"][0]["favoriteId"], identity);
+}
+
+#[test]
+fn favorite_catalog_separates_duplicate_session_ids_and_rejects_replaced_question() {
+    let root = TempDir::new().unwrap();
+    let first = fixture(
+        root.path(),
+        "first-file",
+        &[meta("same-id"), user("First question")],
+    );
+    fixture(
+        root.path(),
+        "second-file",
+        &[meta("same-id"), user("Second question")],
+    );
+    let server = Server::start(root, &["--no-watch"]);
+    let listing = server.wait("/api/sessions?all=1", |v| v["loading"] == false);
+    let mut identity = Value::Null;
+    for row in listing["sessions"].as_array().unwrap() {
+        let key = row["key"].as_str().unwrap();
+        let graph = server.wait(&format!("/api/trail/session/{key}"), |v| {
+            v["loading"] == false
+        });
+        if graph["nodes"][0]["promptPreview"] == "First question" {
+            identity = graph["nodes"][0]["favorite_id"].clone();
+            assert_eq!(
+                server
+                    .post(
+                        &format!("/api/session/{key}/favorite"),
+                        &json!({"favorite":true,"node_id":"q1","generation":graph["generation"]})
+                    )
+                    .status,
+                200
+            );
+        }
+    }
+    assert!(identity.is_string());
+    let catalog = server.wait("/api/trail/favorites", |v| v["loading"] == false);
+    assert_eq!(catalog["results"].as_array().unwrap().len(), 1);
+    assert_eq!(catalog["results"][0]["promptPreview"], "First question");
+    // Replacement keeps the same path/id/q1, but a different question must not inherit it.
+    fs::write(
+        &first,
+        lines(&[meta("same-id"), user("Replacement question")]),
+    )
+    .unwrap();
+    let server = server.restart(&["--no-watch"]);
+    let catalog = server.wait("/api/trail/favorites", |v| v["loading"] == false);
+    assert_eq!(catalog["results"], json!([]));
+    assert_eq!(catalog["unavailable"][0]["favoriteId"], identity);
 }

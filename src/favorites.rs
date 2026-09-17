@@ -1,10 +1,11 @@
 //! Navigator-owned, bounded favorites. Session files are never written.
-use crate::domain::Turn;
+use crate::domain::{Turn, TurnStatus};
 use anyhow::{bail, Context, Result};
 use directories::BaseDirs;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeSet,
+    borrow::Cow,
+    collections::{BTreeSet, HashMap},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -21,6 +22,13 @@ pub(crate) struct Favorites {
     entries: BTreeSet<String>,
 }
 impl Favorites {
+    pub fn questions(&self) -> impl Iterator<Item = &str> {
+        self.entries
+            .iter()
+            .filter(|key| key.starts_with("q:"))
+            .map(String::as_str)
+    }
+
     pub fn contains(&self, key: &str) -> bool {
         self.entries.contains(key)
     }
@@ -42,9 +50,9 @@ pub(crate) fn session_key(path: &Path, id: &str) -> Result<String> {
     Ok(key)
 }
 
-pub(crate) fn question_key(session: &str, turn: &Turn) -> Result<String> {
-    let identity = match turn.id.as_deref().filter(|id| !id.is_empty()) {
-        Some(id) => format!("id:{id}"),
+fn question_identity(turn: &Turn) -> Cow<'_, str> {
+    match turn.id.as_deref().filter(|id| !id.is_empty()) {
+        Some(id) => Cow::Borrowed(id),
         None => {
             // Fixed FNV-1a rather than DefaultHasher, whose algorithm is not stable.
             let hash = turn
@@ -55,17 +63,52 @@ pub(crate) fn question_key(session: &str, turn: &Turn) -> Result<String> {
                 .fold(0xcbf29ce484222325u64, |h, b| {
                     (h ^ u64::from(*b)).wrapping_mul(0x100000001b3)
                 });
-            format!(
+            Cow::Owned(format!(
                 "fallback:{}:{}:{hash:016x}",
                 turn.ordinal,
                 turn.started_at.map(|v| v.to_rfc3339()).unwrap_or_default()
-            )
+            ))
         }
+    }
+}
+
+pub(crate) fn question_key(session: &str, turn: &Turn) -> Result<String> {
+    let identity = question_identity(turn);
+    let identity = if matches!(identity, Cow::Borrowed(_)) {
+        format!("id:{identity}")
+    } else {
+        identity.into_owned()
     };
     let key = format!("q:{}", serde_json::to_string(&(session, identity))?);
     validate_key(&key)?;
     Ok(key)
 }
+
+/// Produce identities lazily so a long session path is not duplicated for every
+/// question before the bounded search projection can enforce its memory budget.
+pub(crate) fn question_keys<'a>(
+    session: &'a str,
+    turns: &'a [Turn],
+) -> impl DoubleEndedIterator<Item = Option<String>> + ExactSizeIterator + 'a {
+    let mut counts = HashMap::new();
+    for turn in turns {
+        let identity = question_identity(turn);
+        *counts
+            .entry((matches!(identity, Cow::Borrowed(_)), identity))
+            .or_insert(0usize) += 1;
+    }
+    turns.iter().map(move |turn| {
+        let identity = question_identity(turn);
+        if turn.status != TurnStatus::RolledBack
+            && counts.get(&(matches!(identity, Cow::Borrowed(_)), identity)) == Some(&1)
+        {
+            question_key(session, turn).ok()
+        } else {
+            None
+        }
+    })
+}
+
 fn validate_key(key: &str) -> Result<()> {
     if key.is_empty() || key.len() > MAX_KEY || !(key.starts_with("s:") || key.starts_with("q:")) {
         bail!("收藏身份无效或过长");
@@ -243,6 +286,29 @@ mod tests {
         turn.ordinal = 5;
         assert_eq!(key, question_key(&b, &turn).unwrap());
     }
+    #[test]
+    fn ambiguous_and_rolled_back_questions_cannot_be_resolved() {
+        let session = session_key(Path::new("/synthetic/a.jsonl"), "same").unwrap();
+        let mut turns = vec![
+            Turn {
+                id: Some("a".into()),
+                ..Turn::default()
+            },
+            Turn {
+                id: Some("b".into()),
+                ..Turn::default()
+            },
+        ];
+        assert!(question_keys(&session, &turns).all(|key| key.is_some()));
+        turns[1].id = Some("a".into());
+        assert!(question_keys(&session, &turns).all(|key| key.is_none()));
+        turns[1].id = Some("b".into());
+        turns[1].status = TurnStatus::RolledBack;
+        let keys: Vec<_> = question_keys(&session, &turns).collect();
+        assert!(keys[0].is_some());
+        assert!(keys[1].is_none());
+    }
+
     #[test]
     fn corrupt_store_is_not_overwritten() {
         let root = tempfile::tempdir().unwrap();

@@ -3,6 +3,8 @@ import test from "node:test";
 import {
   canvasPreferences,
   filterSessions,
+  filterFavoriteQuestions,
+  resolveFavoriteQuestion,
   titleOf,
   relativeTime,
   fullTime,
@@ -187,4 +189,48 @@ test("压缩分组弹窗保留同代追加，切换会话、重置或关联边�
   );
   assert.equal(reconcileEventView("all", graph), "all");
   assert.equal(reconcileEventView(null, graph), null);
+});
+
+test("收藏的问题可独立于父会话收藏检索，支持来源名称和项目路径", () => {
+  const rows = [
+    {
+      favoriteId: "turn:a",
+      sessionKey: "s1",
+      sessionTitle: "机器人控制",
+      cwd: "/work/Robot",
+      promptPreview: "如何选择增益？",
+    },
+    {
+      favoriteId: "turn:b",
+      sessionKey: "s2",
+      sessionTitle: "论文结构",
+      cwd: "/work/paper",
+      promptPreview: "调整摘要",
+    },
+  ];
+  assert.deepEqual(filterFavoriteQuestions(rows, ""), rows);
+  assert.deepEqual(filterFavoriteQuestions(rows, " 增益 "), [rows[0]]);
+  assert.deepEqual(filterFavoriteQuestions(rows, "论文结构"), [rows[1]]);
+  assert.deepEqual(filterFavoriteQuestions(rows, "/WORK/robot"), [rows[0]]);
+  assert.deepEqual(filterFavoriteQuestions(rows, "没有这个词"), []);
+  assert.equal(rows.length, 2);
+});
+
+test("收藏跳转只匹配完整快照中的唯一稳定身份，绝不复用旧问题编号", () => {
+  const nodes = [
+    { id: "q1", favorite_id: "turn:replacement" },
+    { id: "q4", favorite_id: "turn:saved" },
+  ];
+  assert.equal(resolveFavoriteQuestion("turn:saved", nodes, false), "q4");
+  assert.equal(resolveFavoriteQuestion("turn:saved", nodes, true), null);
+  assert.equal(resolveFavoriteQuestion("turn:removed", nodes, false), null);
+  assert.equal(resolveFavoriteQuestion("", [{ id: "q1" }], false), null);
+  assert.equal(
+    resolveFavoriteQuestion(
+      "turn:saved",
+      [...nodes, { id: "q5", favorite_id: "turn:saved" }],
+      false,
+    ),
+    null,
+  );
 });

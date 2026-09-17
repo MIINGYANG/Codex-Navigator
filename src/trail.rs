@@ -2,11 +2,17 @@
 use crate::{
     config::Config,
     domain::{Session, SessionEventSummary},
+    favorites,
     parser::Tail,
     util::preview,
 };
 use serde_json::{json, Value};
-use std::{collections::HashMap, path::PathBuf, sync::mpsc, thread};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::mpsc,
+    thread,
+};
 
 pub(super) fn node_id(index: usize) -> String {
     format!("q{}", index + 1)
@@ -89,6 +95,18 @@ pub(super) struct SearchRow {
     pub title: String,
     pub preview: String,
     pub searchable: String,
+    pub favorite_id: Option<String>,
+    pub cwd: Option<String>,
+    pub timestamp: Option<String>,
+}
+
+impl SearchRow {
+    pub fn retained_bytes(&self) -> usize {
+        self.searchable.len()
+            + self.favorite_id.as_ref().map_or(0, String::len)
+            + self.cwd.as_ref().map_or(0, String::len)
+            + self.timestamp.as_ref().map_or(0, String::len)
+    }
 }
 
 #[derive(Default)]
@@ -134,8 +152,9 @@ pub(super) fn start_index(
                     _ => {}
                 }
             }
+            snapshot.truncated |= tail.reader.byte_offset < size;
             let session = tail.session();
-            let projected = project(session, &key, &mut retained, &mut rows);
+            let projected = project(session, &key, &path, &mut retained, &mut rows);
             snapshot.rows = projected.rows;
             snapshot.counts = projected.counts;
             if !snapshot.truncated && tail.reader.byte_offset >= size {
@@ -160,6 +179,7 @@ pub(super) fn start_index(
 pub(super) fn project(
     session: &Session,
     key: &str,
+    path: &Path,
     retained: &mut usize,
     rows: &mut usize,
 ) -> SearchSnapshot {
@@ -181,18 +201,32 @@ pub(super) fn project(
         .find(|text| !text.trim().is_empty())
         .map(|text| title(text))
         .unwrap_or_default();
-    for (index, turn) in session.turns.iter().enumerate().rev() {
+    let identity = favorites::session_key(path, &session.meta.id).ok();
+    let identities =
+        favorites::question_keys(identity.as_deref().unwrap_or_default(), &session.turns);
+    let cwd = session
+        .meta
+        .cwd
+        .as_ref()
+        .map(|path| path.to_string_lossy().into_owned());
+    for (index, (turn, favorite_id)) in session.turns.iter().zip(identities).enumerate().rev() {
         let text = if turn.prompt.text.is_empty() {
             &turn.prompt.preview
         } else {
             &turn.prompt.text
         };
         let searchable = format!("{} {}", session_title, text).to_lowercase();
-        if retained.saturating_add(searchable.len()) > 32 * 1024 * 1024 || *rows >= 100_000 {
+        let favorite_id = favorite_id.filter(|_| identity.is_some());
+        let timestamp = turn.started_at.map(|time| time.to_rfc3339());
+        let retained_bytes = searchable.len()
+            + favorite_id.as_ref().map_or(0, String::len)
+            + cwd.as_ref().map_or(0, String::len)
+            + timestamp.as_ref().map_or(0, String::len);
+        if retained.saturating_add(retained_bytes) > 32 * 1024 * 1024 || *rows >= 100_000 {
             snapshot.truncated = true;
             break;
         }
-        *retained += searchable.len();
+        *retained += retained_bytes;
         *rows += 1;
         snapshot.rows.push(SearchRow {
             key: key.to_owned(),
@@ -201,6 +235,9 @@ pub(super) fn project(
             title: title(text),
             preview: preview(text, 200),
             searchable,
+            favorite_id,
+            cwd: cwd.clone(),
+            timestamp,
         });
     }
     snapshot
@@ -336,13 +373,27 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(nodes[0]["commits"][0]["hash"], "abc1234");
         assert_eq!(nodes[1]["commits"], json!([]));
-        let snapshot = project(&s, "s1", &mut 0, &mut 0);
+        let snapshot = project(
+            &s,
+            "s1",
+            Path::new("/synthetic/session.jsonl"),
+            &mut 0,
+            &mut 0,
+        );
         assert_eq!(snapshot.event_summaries["s1"].commit_count, 1);
         assert_eq!(snapshot.event_summaries["s1"].compaction_count, 1);
         s.turns[0].status = TurnStatus::RolledBack;
         assert_eq!(graph(&s).0[0]["commits"], json!([]));
         assert_eq!(
-            project(&s, "s1", &mut 0, &mut 0).event_summaries["s1"].commit_count,
+            project(
+                &s,
+                "s1",
+                Path::new("/synthetic/session.jsonl"),
+                &mut 0,
+                &mut 0
+            )
+            .event_summaries["s1"]
+                .commit_count,
             0
         );
     }

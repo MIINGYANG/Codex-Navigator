@@ -1,4 +1,4 @@
-import type { CanvasLayout, SessionEvent } from "./graph";
+import type { CanvasLayout, QuestionNode, SessionEvent } from "./graph";
 
 export type SessionSummary = {
   key: string;
@@ -167,4 +167,46 @@ export function reconcileEventView(
     next.edges.some((edge) => edge.id === view.edgeId)
     ? view
     : null;
+}
+
+export type FavoriteQuestion = {
+  favoriteId: string;
+  sessionKey: string;
+  nodeId: string;
+  sessionTitle: string;
+  cwd: string | null;
+  promptPreview: string;
+  timestamp: string | null;
+  ordinal: number;
+};
+
+export type FavoriteCatalog = {
+  loading: boolean;
+  truncated: boolean;
+  error: string | null;
+  results: FavoriteQuestion[];
+  unavailable: { favoriteId: string; reason: string }[];
+};
+
+export function filterFavoriteQuestions(
+  questions: FavoriteQuestion[],
+  query: string,
+) {
+  const term = query.trim().toLocaleLowerCase();
+  return questions.filter((question) =>
+    `${question.promptPreview} ${question.sessionTitle} ${question.cwd || ""}`
+      .toLocaleLowerCase()
+      .includes(term),
+  );
+}
+
+// 只有完整快照中的唯一稳定身份才允许跳转，qN 会在会话重建时复用。
+export function resolveFavoriteQuestion(
+  favoriteId: string,
+  nodes: QuestionNode[],
+  loading: boolean,
+): string | null {
+  if (loading || !favoriteId) return null;
+  const matches = nodes.filter((node) => node.favorite_id === favoriteId);
+  return matches.length === 1 ? matches[0].id : null;
 }

@@ -189,3 +189,16 @@
 **Key insight:** 界面分支和历史文件监听不能创造不存在于磁盘的内容；临时侧聊是内存分支，需要验证实际承载 CLI 的服务是否支持完整被动事件与可靠父轮次。稳定身份、关联位置、内容完整性应分开处理；收不到的内容要标缺口，不以时间邻近猜关系，也不能把留存副本冒充可 resume 的 Codex 会话。
 **Details / snippet:** 独立 HTML 预览保留原问题画布，青色侧聊按需展开，右栏问答、收藏/重命名/导出及可恢复移除均使用合成数据；1848/1280/390px 共123项浏览器检查通过，另验证拖拽/缩放/小地图。正式采集尚未实现。候选共享 app-server 与 Hooks 需隔离 PoC；[官方命令](https://learn.chatgpt.com/docs/developer-commands?surface=cli)、[app-server](https://learn.chatgpt.com/docs/app-server)、[Hooks](https://learn.chatgpt.com/docs/hooks)。
 **Tags:** #btw #ephemeral #sidecar #prototype #provenance #verification
+
+
+## 2026-09-17 — 收藏问题应独立于父会话收藏被发现
+**Question:** 单个问题被收藏，但所属会话未收藏时怎样快速找回？
+**Key insight:** 收藏目录应直接索引问题，不用父会话的收藏状态作为入口条件；复用全历史异步索引，展示来源、路径与时间。跳转必须按稳定身份匹配完整且无读取错误的快照，目录里的qN只能作为提示；迟到响应不能覆盖用户后来选择的会话。
+**Details / snippet:** 3.2.0 增加 /api/trail/favorites 与“全部 / 问题 / 会话”分类，兼容已有收藏文件；损坏、缺失、索引中与截断明确提示，索引不从收藏键读取任意路径。236项Rust、46项前端、完整构建与1848/390px收藏专项/原功能浏览器回归通过。所有验收使用合成数据，源字节保持不变。
+**Tags:** #favorites #navigation #identity #race #verification
+
+## 2026-09-17 — /btw 被动订阅限制经隔离实测确认
+**Question:** 只连接同一Codex服务是否就能自动留存临时侧聊？
+**Key insight:** Codex0.153.2会向旁观连接广播临时线程创建与状态，但正文事件只发给已订阅的创建连接；临时线程读取turns与resume均被拒绝，没有thread/subscribe接口。真实隔离TUI的/btw请求lastTurnId为空，因此即使采用显式协议中转，也必须区分明确父轮次与待确认位置，并排除内部边界注入。
+**Details / snippet:** PoC未发送turn/start或请求模型；合成shellCommand验证双方事件差异，Unix socket实测为HTTP Upgrade后的WebSocket frames。候选中转需改变启动方式，已向用户询问，未自动修改真实配置；详见docs/side-chat-capture.md。
+**Tags:** #btw #app-server #protocol #ephemeral #verification

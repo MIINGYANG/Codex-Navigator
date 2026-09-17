@@ -31,6 +31,7 @@ export interface QuestionNode {
   parentId?: string | null;
   isLatest: boolean;
   favorite?: boolean;
+  favorite_id?: string | null;
   bookmarkId?: string;
   commits?: SessionEvent[];
 }

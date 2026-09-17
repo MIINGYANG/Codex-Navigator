@@ -31,6 +31,7 @@ import {
 } from "lucide-react";
 import Canvas, { type CanvasHandle } from "./Canvas";
 import ThemeSwitch from "./ThemeSwitch";
+import FavoriteLibrary from "./FavoriteLibrary";
 import ProjectPath from "./ProjectPath";
 import SessionActionDialog, {
   SessionActions,
@@ -58,6 +59,8 @@ import {
   titleOf,
   canvasPreferences,
   filterSessions,
+  resolveFavoriteQuestion,
+  type FavoriteQuestion,
   type SearchResult,
   type SessionSummary,
 } from "./state";
@@ -153,6 +156,7 @@ export default function App() {
   const [sessionFilter, setSessionFilter] = useState<
     "all" | "favorites" | "commits"
   >("all");
+  const [favoriteRevision, setFavoriteRevision] = useState(0);
   const [favoriteFirst, setFavoriteFirst] = useState(false);
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [showCompactions, setShowCompactions] = useState(true);
@@ -173,7 +177,11 @@ export default function App() {
   const canvas = useRef<CanvasHandle>(null);
   const canvasStage = useRef<HTMLDivElement>(null);
   const graphRef = useRef<GraphResponse | null>(null);
-  const requestedNode = useRef<{ key: string; id: string } | null>(null);
+  const requestedNode = useRef<{
+    key: string;
+    id: string;
+    favoriteId?: string;
+  } | null>(null);
   const refreshGraph = useRef<() => void>(() => {});
   const refreshSessions = useRef<() => void>(() => {});
   const initialSelection = useRef(false);
@@ -417,14 +425,25 @@ export default function App() {
         }
         setGraphError("");
         if (requestedNode.current?.key === sessionKey) {
-          const id = requestedNode.current.id;
-          if (next.nodes.some((node) => node.id === id)) {
+          const request = requestedNode.current;
+          const id = request.favoriteId
+            ? resolveFavoriteQuestion(
+                request.favoriteId,
+                next.nodes,
+                next.loading || Boolean(next.error),
+              )
+            : next.nodes.find((node) => node.id === request.id)?.id;
+          if (id) {
             setSelectedId(id);
             requestedNode.current = null;
             requestAnimationFrame(() => canvas.current?.focus(id));
           } else if (!next.loading) {
             requestedNode.current = null;
-            setToast("该问题已不在当前会话快照中，请重新搜索。");
+            setToast(
+              request.favoriteId
+                ? "收藏的问题暂时无法定位，原记录可能已回滚或变更。"
+                : "该问题已不在当前会话快照中，请重新搜索。",
+            );
           }
         }
         // SSE carries revisions; polling is only a loading/error recovery safety net.
@@ -591,6 +610,7 @@ export default function App() {
       favoriteEpoch.current++;
       favoriteInFlight.current.delete(pendingKey);
       setFavoriteBusy(new Set(favoriteInFlight.current));
+      setFavoriteRevision((value) => value + 1);
       refreshSessions.current();
       refreshGraph.current();
     }
@@ -642,6 +662,7 @@ export default function App() {
       graphRef.current = next;
       setGraph(next);
     }
+    setFavoriteRevision((value) => value + 1);
     refreshSessions.current();
     setToast("会话名称已同步到 Codex");
   }
@@ -660,6 +681,7 @@ export default function App() {
       setFocusPath(false);
       setKey(remaining[0]?.key || null);
     }
+    setFavoriteRevision((value) => value + 1);
     refreshSessions.current();
     setToast("会话文件已移到系统回收站");
   }
@@ -683,11 +705,80 @@ export default function App() {
       refreshGraph.current();
     }
   }
+  function chooseFavorite(question: FavoriteQuestion) {
+    setSearchOpen(false);
+    setSidebarOpen(false);
+    setSelectedEventId(null);
+    setFocusPath(false);
+    setFavoriteOnly(false);
+    requestedNode.current = {
+      key: question.sessionKey,
+      id: question.nodeId,
+      favoriteId: question.favoriteId,
+    };
+    if (key === question.sessionKey) refreshGraph.current();
+    else setKey(question.sessionKey);
+  }
   const visibleSessions = filterSessions(
     sessions,
     sessionQuery,
     sessionFilter,
     favoriteFirst,
+  );
+  const renderSession = (session: SessionSummary) => (
+    <div
+      className={`session-row ${session.favorite ? "is-favorite" : ""} ${(session.commit_count || 0) > 0 ? "has-commits" : ""}`}
+      key={session.key}
+    >
+      <button
+        className={`session-item ${session.key === key ? "active" : ""}`}
+        aria-current={session.key === key ? "true" : undefined}
+        onClick={() => chooseSession(session.key)}
+        title={`${titleOf(session)}\n${session.cwd || "项目未记录"}`}
+      >
+        <MessageCircle size={17} />
+        <span className="session-copy">
+          <strong>{titleOf(session)}</strong>
+          <span>
+            {session.key === key && graph
+              ? `${graph.nodes.length} 个问题`
+              : session.turn_count !== null
+                ? `${session.turn_count} 个问题`
+                : "等待索引"}
+            <i>·</i>
+            {relativeTime(session.updated_at)}
+          </span>
+          <small>{session.cwd || "项目路径未记录"}</small>
+          {(session.commit_count || 0) > 0 && (
+            <span className="session-commit-summary">
+              <GitCommitHorizontal size={11} />
+              已提交 {session.commit_count}
+              {session.last_commit?.version && (
+                <em>{session.last_commit.version}</em>
+              )}
+            </span>
+          )}
+        </span>
+        <ChevronRight size={14} />
+      </button>
+      <button
+        className={`session-favorite icon-button ${session.favorite ? "is-on" : ""}`}
+        aria-label={`${session.favorite ? "取消收藏" : "收藏"}会话：${titleOf(session)}`}
+        aria-pressed={Boolean(session.favorite)}
+        disabled={favoriteBusy.has(`${session.key}:session`)}
+        onClick={() => void toggleFavorite(session.key, !session.favorite)}
+      >
+        <Star size={14} />
+      </button>
+      <SessionActions
+        session={{
+          key: session.key,
+          title: titleOf(session),
+          cwd: session.cwd,
+        }}
+        onAction={manage}
+      />
+    </div>
   );
   const warnings = [...(graph?.notices || [])];
   if (graph?.favorites_error || favoritesError)
@@ -743,7 +834,10 @@ export default function App() {
             className="icon-button"
             title="重新扫描会话"
             aria-label="重新扫描会话"
-            onClick={() => refreshSessions.current()}
+            onClick={() => {
+              refreshSessions.current();
+              setFavoriteRevision((value) => value + 1);
+            }}
           >
             <RefreshCw
               size={15}
@@ -754,8 +848,12 @@ export default function App() {
         <label className="session-filter">
           <Search size={15} />
           <input
-            aria-label="筛选会话"
-            placeholder="查找会话或项目…"
+            aria-label={sessionFilter === "favorites" ? "筛选收藏" : "筛选会话"}
+            placeholder={
+              sessionFilter === "favorites"
+                ? "查找收藏的问题、会话或项目…"
+                : "查找会话或项目…"
+            }
             value={sessionQuery}
             onChange={(event) => setSessionQuery(event.target.value)}
           />
@@ -790,91 +888,47 @@ export default function App() {
             </button>
           ))}
         </div>
-        <label className="favorite-priority">
-          <input
-            type="checkbox"
-            checked={favoriteFirst}
-            onChange={(event) => setFavoriteFirst(event.target.checked)}
+        {sessionFilter === "favorites" ? (
+          <FavoriteLibrary
+            sessions={sessions}
+            query={sessionQuery}
+            revision={favoriteRevision}
+            selectedKey={key}
+            selectedFavoriteId={selected?.favorite_id || null}
+            renderSession={renderSession}
+            onQuestion={chooseFavorite}
           />
-          收藏优先
-        </label>
-        <nav className="session-list" aria-label="选择会话">
-          {sessionsLoading && !sessions.length && (
-            <div className="skeleton-list" aria-label="正在查找会话">
-              {[0, 1, 2, 3].map((id) => (
-                <div className="skeleton" key={id} />
-              ))}
-            </div>
-          )}
-          {visibleSessions.map((session) => (
-            <div
-              className={`session-row ${session.favorite ? "is-favorite" : ""} ${(session.commit_count || 0) > 0 ? "has-commits" : ""}`}
-              key={session.key}
-            >
-              <button
-                className={`session-item ${session.key === key ? "active" : ""}`}
-                aria-current={session.key === key ? "true" : undefined}
-                onClick={() => chooseSession(session.key)}
-                title={`${titleOf(session)}\n${session.cwd || "项目未记录"}`}
-              >
-                <MessageCircle size={17} />
-                <span className="session-copy">
-                  <strong>{titleOf(session)}</strong>
-                  <span>
-                    {session.key === key && graph
-                      ? `${graph.nodes.length} 个问题`
-                      : session.turn_count !== null
-                        ? `${session.turn_count} 个问题`
-                        : "等待索引"}
-                    <i>·</i>
-                    {relativeTime(session.updated_at)}
-                  </span>
-                  <small>{session.cwd || "项目路径未记录"}</small>
-                  {(session.commit_count || 0) > 0 && (
-                    <span className="session-commit-summary">
-                      <GitCommitHorizontal size={11} />
-                      已提交 {session.commit_count}
-                      {session.last_commit?.version && (
-                        <em>{session.last_commit.version}</em>
-                      )}
-                    </span>
-                  )}
-                </span>
-                <ChevronRight size={14} />
-              </button>
-              <button
-                className={`session-favorite icon-button ${session.favorite ? "is-on" : ""}`}
-                aria-label={`${session.favorite ? "取消收藏" : "收藏"}会话：${titleOf(session)}`}
-                aria-pressed={Boolean(session.favorite)}
-                disabled={favoriteBusy.has(`${session.key}:session`)}
-                onClick={() =>
-                  void toggleFavorite(session.key, !session.favorite)
-                }
-              >
-                <Star size={14} />
-              </button>
-              <SessionActions
-                session={{
-                  key: session.key,
-                  title: titleOf(session),
-                  cwd: session.cwd,
-                }}
-                onAction={manage}
+        ) : (
+          <>
+            <label className="favorite-priority">
+              <input
+                type="checkbox"
+                checked={favoriteFirst}
+                onChange={(event) => setFavoriteFirst(event.target.checked)}
               />
-            </div>
-          ))}
-          {!sessionsLoading && !visibleSessions.length && (
-            <p className="quiet-empty">
-              {sessionQuery
-                ? "没有匹配的会话"
-                : sessionFilter === "favorites"
-                  ? "还没有收藏会话，点击会话旁的星标即可收藏。"
-                  : sessionFilter === "commits"
-                    ? "尚未发现已确认提交的会话；完整索引可能仍在读取中。"
-                    : "还没有发现主会话"}
-            </p>
-          )}
-        </nav>
+              收藏优先
+            </label>
+            <nav className="session-list" aria-label="选择会话">
+              {sessionsLoading && !sessions.length && (
+                <div className="skeleton-list" aria-label="正在查找会话">
+                  {[0, 1, 2, 3].map((id) => (
+                    <div className="skeleton" key={id} />
+                  ))}
+                </div>
+              )}
+              {visibleSessions.map(renderSession)}
+              {!sessionsLoading && !visibleSessions.length && (
+                <p className="quiet-empty">
+                  {sessionQuery
+                    ? "没有匹配的会话"
+                    : sessionFilter === "commits"
+                      ? "尚未发现已确认提交的会话；完整索引可能仍在读取中。"
+                      : "还没有发现主会话"}
+                </p>
+              )}
+            </nav>
+          </>
+        )}
         <div className="sidebar-bottom">
           <div>
             <ShieldCheck size={16} />
@@ -892,7 +946,7 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Codex Navigator 3.1</span>
+          <span className="version">Codex Navigator 3.2</span>
         </div>
       </aside>
 

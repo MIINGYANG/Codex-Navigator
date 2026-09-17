@@ -719,17 +719,24 @@ impl Backend {
         }
         self.search_checked = std::time::Instant::now();
         self.search_deferred = false;
-        if self.listings[1].is_none() {
+        if self.listings[1].is_none() && self.scan_error[1].is_none() {
             self.start_scan(true);
             return;
         }
         self.search_refresh_requested = false;
-        let keys: Vec<_> = self.listings[1]
+        let mut keys: Vec<_> = self.listings[1]
             .as_ref()
             .into_iter()
             .flatten()
             .filter_map(|v| v["key"].as_str().map(str::to_owned))
             .collect();
+        // Explicit --session paths were already authorized and validated at startup.
+        // Never derive filesystem targets from favorite-store keys.
+        for (key, entry) in &self.registered {
+            if entry.explicit && !keys.contains(key) {
+                keys.push(key.clone());
+            }
+        }
         let mut signature = HashMap::new();
         let mut paths = Vec::new();
         let mut reusable = std::collections::HashSet::new();
@@ -792,7 +799,7 @@ impl Backend {
                 .rows
                 .iter()
                 .filter(|row| !changed.contains(&row.key));
-            let mut retained = unchanged.clone().map(|row| row.searchable.len()).sum();
+            let mut retained = unchanged.clone().map(|row| row.retained_bytes()).sum();
             let mut rows = unchanged.count();
             paths.retain(|(key, _)| {
                 if let Some(open) = self.open.get(key).filter(|open| {
@@ -805,7 +812,13 @@ impl Backend {
                             .get(key)
                             .is_some_and(|(len, _)| *len == open.total)
                 }) {
-                    let snapshot = trail::project(&open.session, key, &mut retained, &mut rows);
+                    let snapshot = trail::project(
+                        &open.session,
+                        key,
+                        &self.registered[key].path,
+                        &mut retained,
+                        &mut rows,
+                    );
                     self.search.rows.retain(|row| row.key != *key);
                     self.search.rows.extend(snapshot.rows);
                     self.search.counts.extend(snapshot.counts);
@@ -1082,11 +1095,15 @@ impl Backend {
                     "会话已变化或尚未加载，请刷新后再收藏",
                 );
             }
-            let Some(turn) = open.session.turns.get(index) else {
+            if index >= open.session.turns.len() {
                 return ApiReply::error(StatusCode::NOT_FOUND, "问题不存在");
-            };
-            favorites::session_key(path, &open.session.meta.id)
-                .and_then(|session| favorites::question_key(&session, turn))
+            }
+            favorites::session_key(path, &open.session.meta.id).and_then(|session| {
+                favorites::question_keys(&session, &open.session.turns)
+                    .nth(index)
+                    .flatten()
+                    .context("问题已回退或身份不唯一，无法收藏")
+            })
         } else {
             discovery::read_summary(path, &self.config)
                 .and_then(|summary| favorites::session_key(path, &summary.id))
@@ -1176,10 +1193,68 @@ impl Backend {
         response
     }
 
+    fn favorite_catalog(&mut self) -> ApiReply {
+        self.ensure_search();
+        let store = match favorites::path().and_then(|path| favorites::load(&path)) {
+            Ok(store) => store,
+            Err(error) => {
+                return ApiReply::json(
+                    json!({"loading":false,"truncated":false,"error":error.to_string(),"results":[],"unavailable":[]}),
+                )
+            }
+        };
+        let loading = self.search_worker.is_some() || self.search_deferred || self.scan.is_some();
+        let mut matches: HashMap<&str, Vec<&trail::SearchRow>> = HashMap::new();
+        for row in &self.search.rows {
+            if let Some(identity) = row
+                .favorite_id
+                .as_deref()
+                .filter(|identity| store.contains(identity))
+            {
+                matches.entry(identity).or_default().push(row);
+            }
+        }
+        let mut results = Vec::new();
+        let mut unavailable = Vec::new();
+        for identity in store.questions() {
+            let found = matches
+                .get(identity)
+                .filter(|rows| rows.len() == 1)
+                .map(|rows| rows[0]);
+            if let Some(row) = found.filter(|row| self.safe_target(&row.key)) {
+                let summary = self
+                    .listings
+                    .iter()
+                    .flatten()
+                    .flatten()
+                    .find(|summary| summary["key"] == row.key);
+                let title = summary
+                    .and_then(|summary| summary["title"].as_str())
+                    .filter(|title| !title.trim().is_empty())
+                    .unwrap_or(&row.session_title);
+                results.push(json!({"favoriteId":identity,"sessionKey":row.key,"nodeId":trail::node_id(row.index),"sessionTitle":title,"cwd":row.cwd,"promptPreview":row.preview,"timestamp":row.timestamp,"ordinal":row.index+1}));
+            } else {
+                unavailable.push(json!({"favoriteId":identity,"reason":if loading {"indexing"} else {"unavailable"}}));
+            }
+        }
+        results.sort_by(|a, b| {
+            b["timestamp"]
+                .as_str()
+                .cmp(&a["timestamp"].as_str())
+                .then_with(|| a["favoriteId"].as_str().cmp(&b["favoriteId"].as_str()))
+        });
+        ApiReply::json(
+            json!({"loading":loading,"truncated":self.search.truncated || self.scan_error[1].is_some(),"error":self.scan_error[1],"results":results,"unavailable":unavailable}),
+        )
+    }
+
     fn route(&mut self, path: &str, query: &HashMap<String, String>) -> ApiReply {
         self.tick();
         if path == "/api/health" {
             return ApiReply::json(json!({"ok":true,"readOnly":false,"localOnly":true}));
+        }
+        if path == "/api/trail/favorites" {
+            return self.favorite_catalog();
         }
         if path == "/api/trail/search" {
             self.ensure_search();
@@ -1234,13 +1309,18 @@ impl Backend {
                 .as_ref()
                 .zip(favorite_store.as_ref().ok())
                 .is_some_and(|(key, data)| data.contains(key));
-            for (node, turn) in nodes.iter_mut().zip(&open.session.turns) {
-                node["favorite"] = json!(identity
+            let question_keys = identity
+                .as_ref()
+                .map(|session| {
+                    favorites::question_keys(session, &open.session.turns).collect::<Vec<_>>()
+                })
+                .unwrap_or_else(|| vec![None; nodes.len()]);
+            for (node, question_key) in nodes.iter_mut().zip(question_keys) {
+                node["favorite"] = json!(question_key
                     .as_ref()
                     .zip(favorite_store.as_ref().ok())
-                    .is_some_and(|(session, data)| {
-                        favorites::question_key(session, turn).is_ok_and(|key| data.contains(&key))
-                    }));
+                    .is_some_and(|(key, data)| data.contains(key)));
+                node["favorite_id"] = json!(question_key);
             }
             let stats = &open.session.parse_stats;
             let id = open.session.meta.id.clone();
