@@ -215,3 +215,9 @@
 **Key insight:** Codex 0.153.2 隔离实测中官方改名不改变 rollout 字节；分页分支按 history_base.thread_id 引用原文件，移走来源能重现错误，恢复原文件即可恢复。系统回收站保证可恢复性，不保证依赖该文件的其他会话仍可运行；仅 forked_from_id 不构成文件依赖。
 **Details / snippet:** 3.2.1 删除前有界扫描 sessions/archived_sessions 首条元数据，纳入隐藏子会话，引用存在或检查不完整均拒绝；246项Rust、46项前端、14项诊断脚本测试及完整构建和1848/390px管理QA通过。诊断脚本只核对首行ID和回收站原路径，不输出正文或自动恢复；实际/home/lmy设备不可达，真实恢复仍待设备诊断结果。外部并发创建分支无法由Sidecar预检加锁排除。
 **Tags:** #codex #lineage #trash #recovery #regression #verification
+
+## 2026-09-17 — 用户确认缺失来源恢复成功
+**Question:** 恢复回收站文件后 Codex 正常打开，3.2.1 是否解决此次问题？
+**Key insight:** 用户在目标设备确认两个失败会话依赖同一祖先来源，并在恢复文件后成功恢复对话，与隔离复现一致。3.2.1 解决 Web 删除缺少依赖检查的问题：先扫描引用再调用回收站；不自动补回已删除内容，也不替代部署更新。
+**Details / snippet:** 用户报告恢复 rollout 和 codex 开头的文件后成功；本机未访问该设备，不推断后者作用。功能提交 f7837ff 与本地 v3.2.1 已通过完整验收，尚未推送、安装或重启服务；本轮只补充恢复结果记录，git diff --check通过，不重复运行应用测试。
+**Tags:** #recovery #lineage #verification #release
