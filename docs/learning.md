@@ -245,3 +245,9 @@
 **Key insight:** 保存用户首选宽度，按当前窗口预算推导显示宽度，缩小窗口不应覆写首选；只有真实调整才更新偏好。拖动时暂停重排与定位动画，释放后仅补救被遮挡的选中节点；取消、失焦及跨断点卸载都应恢复完整快照。
 **Details / snippet:** 3.3.0增加两侧pointer capture分隔线和键盘/双击操作，桌面画布保留480px，窄屏沿用抽屉。52项前端、246项Rust、14项诊断脚本测试及完整检查/构建通过；新增1848/1280/900/390px真实鼠标QA与原画布1848/390px回归通过。读取与验收只用合成会话，未改变原文件；宽度存储只在浏览器本地。
 **Tags:** #layout #resize #interaction #preferences #accessibility #verification
+
+## 2026-09-23 — 3.3.0 发布与已运行新版服务核对
+**Question:** 推送并安装新版时，是否必须重启当前网页？
+**Key insight:** 先核对运行进程实际持有的程序版本与哈希；若用户已经用release启动新版，安装全局命令后可保留现有服务。发布标签指向已验收功能提交，交付记录以main文档提交追加。
+**Details / snippet:** main/v3.3.0首次推送读回3e14695；本机codex-nav/codex-trail更新3.3.0，源码目录外新登录Shell及安装哈希通过。PID185463已持有3.3.0相同release，未重启；安装版隔离/api/info、首页及实际引用JS资源验收通过，测试服务已关闭。没有代更新另一台/home/lmy设备。
+**Tags:** #release #installation #process #verification
