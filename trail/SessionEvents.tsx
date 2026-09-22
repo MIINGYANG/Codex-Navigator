@@ -33,6 +33,7 @@ export function EventDetail({
   }, [event.id]);
   return (
     <aside
+      id="detail-panel"
       className="detail-panel has-selection event-detail"
       aria-label="会话事件详情"
       ref={panel}

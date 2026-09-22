@@ -6,6 +6,7 @@ export default [
       "scripts/management_qa.mjs",
       "scripts/features_qa.mjs",
       "scripts/favorites_qa.mjs",
+      "scripts/panels_qa.mjs",
     ],
     languageOptions: {
       ecmaVersion: "latest",

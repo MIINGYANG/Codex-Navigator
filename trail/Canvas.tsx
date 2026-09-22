@@ -78,6 +78,7 @@ export interface CanvasProps {
   onFocusPathChange(value: boolean): void;
   onZoomChange?(percent: number): void;
   layout?: CanvasLayout;
+  panelResizing?: boolean;
   favoriteOnly?: boolean;
   events?: SessionEvent[];
   onToggleFavorite?(node: QuestionNode): void;
@@ -318,6 +319,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     onFocusPathChange,
     onZoomChange,
     layout = DEFAULT_LAYOUT,
+    panelResizing = false,
     favoriteOnly = false,
     events = [],
     onToggleFavorite,
@@ -350,11 +352,14 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
   );
 
   const container = useRef<HTMLDivElement>(null);
+  const panelResizingRef = useRef(panelResizing);
+  panelResizingRef.current = panelResizing;
   const [availableWidth, setAvailableWidth] = useState(670);
   const metrics = layoutMetrics(layout, availableWidth);
   const layoutKey = `${layout.direction}:${layout.density}:${metrics.columns}`;
   const layoutRef = useRef("");
   useLayoutEffect(() => {
+    if (panelResizing) return;
     const element = container.current;
     if (!element) return;
     const measure = () =>
@@ -363,8 +368,15 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
     const observer = new ResizeObserver(measure);
     observer.observe(element);
     return () => observer.disconnect();
-  }, []);
+  }, [panelResizing]);
   const focusFrame = useRef<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!panelResizing) return;
+    if (focusFrame.current !== undefined)
+      cancelAnimationFrame(focusFrame.current);
+    // A divider can be grabbed before an earlier focus animation has ended.
+    void flow.setViewport(flow.getViewport(), { duration: 0 });
+  }, [panelResizing, flow]);
   const initialized = useNodesInitialized();
   const [nodes, setNodes] = useState<CardNode[]>([]);
   const [nodesIdentity, setNodesIdentity] = useState("");
@@ -556,6 +568,35 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
   );
   const focusLatest = useRef(focus);
   focusLatest.current = focus;
+  const wasPanelResizing = useRef(false);
+  useLayoutEffect(() => {
+    const finished = wasPanelResizing.current && !panelResizing;
+    wasPanelResizing.current = panelResizing;
+    if (!finished || !selectedId) return;
+    const frame = requestAnimationFrame(() => {
+      const element = container.current;
+      const card = [...(element?.querySelectorAll(".react-flow__node") ?? [])]
+        .find((node) => node.getAttribute("data-id") === selectedId)
+        ?.getBoundingClientRect();
+      if (!element || !card) return;
+      const drawer = document.querySelector<HTMLElement>(
+        ".detail-panel.has-selection",
+      );
+      const area = visibleCanvasCenter(
+        element.getBoundingClientRect(),
+        drawer?.getBoundingClientRect() ?? null,
+      );
+      // Keep a visible card's viewport; only rescue a card covered by the pane.
+      if (
+        card.left < area.left ||
+        card.right > area.left + area.width ||
+        card.top < area.top ||
+        card.bottom > area.top + area.height
+      )
+        focusLatest.current(selectedId);
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [panelResizing, selectedId]);
   useLayoutEffect(() => {
     if (!selectedId) return;
     focusLatest.current(selectedId);
@@ -586,7 +627,7 @@ const CanvasInner = forwardRef<CanvasHandle, CanvasProps>(function CanvasInner(
       const next = geometry();
       if (next !== previous) {
         previous = next;
-        focusLatest.current(selectedId);
+        if (!panelResizingRef.current) focusLatest.current(selectedId);
       }
     };
     const observer = new ResizeObserver(resize);

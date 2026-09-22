@@ -172,6 +172,7 @@ kbd {
   background: var(--qt-accent-border);
 }
 .app-shell {
+  position: relative;
   display: flex;
   height: 100dvh;
   min-height: 400px;
@@ -521,6 +522,98 @@ textarea {
   min-height: 0;
   display: flex;
   position: relative;
+}
+.panel-resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 10px;
+  z-index: 35;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  outline: none;
+}
+.panel-resize-sidebar {
+  left: calc(var(--qt-sidebar-width) - 1px);
+}
+.panel-resize-detail {
+  right: calc(var(--qt-detail-width) - 1px);
+}
+.panel-resize-handle::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 2px;
+  background: transparent;
+  transition: background 120ms;
+}
+.panel-resize-detail::before {
+  left: auto;
+  right: 0;
+}
+.panel-resize-indicator {
+  position: absolute;
+  top: calc(50% - 18px);
+  left: 0;
+  width: 3px;
+  height: 36px;
+  border-radius: 3px;
+  background: var(--qt-border);
+}
+.panel-resize-detail .panel-resize-indicator {
+  left: auto;
+  right: 0;
+}
+.panel-resize-handle:hover::before,
+.panel-resize-handle:focus-visible::before,
+.panel-resize-handle.is-dragging::before,
+.panel-resize-handle:hover .panel-resize-indicator,
+.panel-resize-handle:focus-visible .panel-resize-indicator,
+.panel-resize-handle.is-dragging .panel-resize-indicator {
+  background: var(--qt-accent);
+}
+.panel-resize-value {
+  display: none;
+  position: absolute;
+  top: calc(50% + 28px);
+  left: 12px;
+  white-space: nowrap;
+  pointer-events: none;
+  border: 1px solid var(--qt-accent-border);
+  border-radius: 6px;
+  padding: 4px 7px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--qt-text);
+  background: var(--qt-panel);
+  box-shadow: 0 3px 12px rgb(var(--qt-shadow-rgb) / 12%);
+}
+.panel-resize-detail .panel-resize-value {
+  left: auto;
+  right: 12px;
+}
+.panel-resize-handle:focus-visible .panel-resize-value,
+.panel-resize-handle.is-dragging .panel-resize-value {
+  display: block;
+}
+.is-panel-resizing,
+.is-panel-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+@media (min-width: 1280px) {
+  .app-shell .session-sidebar {
+    width: var(--qt-sidebar-width, 250px);
+  }
+  .app-shell .detail-panel {
+    width: var(--qt-detail-width, 360px);
+  }
+}
+@media (max-width: 1279px) {
+  .panel-resize-handle {
+    display: none;
+  }
 }
 .canvas-panel {
   flex: 1;

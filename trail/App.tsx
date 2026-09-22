@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   ArrowDown,
   ArrowLeft,
@@ -33,6 +40,15 @@ import Canvas, { type CanvasHandle } from "./Canvas";
 import ThemeSwitch from "./ThemeSwitch";
 import FavoriteLibrary from "./FavoriteLibrary";
 import ProjectPath from "./ProjectPath";
+import { PanelResizeHandle } from "./PanelResizeHandle";
+import {
+  PANEL_DEFAULTS,
+  PANEL_DESKTOP_MIN,
+  panelPreferences,
+  panelResizeBounds,
+  resolvePanelWidths,
+  type PanelSide,
+} from "./panelWidths";
 import SessionActionDialog, {
   SessionActions,
   type SessionAction,
@@ -137,6 +153,60 @@ export default function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(window.innerWidth);
+  const [panelResizing, setPanelResizing] = useState(false);
+  const [panelWidths, setPanelWidths] = useState(() => {
+    try {
+      return panelPreferences(
+        JSON.parse(localStorage.getItem("questionTrail.panelWidths") || "null"),
+      );
+    } catch {
+      return panelPreferences(null);
+    }
+  });
+  const desktopPanels = viewportWidth >= PANEL_DESKTOP_MIN;
+  const actualPanels = resolvePanelWidths(
+    panelWidths,
+    viewportWidth,
+    !sidebarCollapsed,
+  );
+  const panelDragStart = useRef(panelWidths);
+  const beginPanelResize = (dragging: boolean) => {
+    if (dragging) panelDragStart.current = panelWidths;
+    setPanelResizing(dragging);
+  };
+  const cancelPanelResize = () => setPanelWidths(panelDragStart.current);
+  const resizePanel = (side: PanelSide, value: number) => {
+    if (value === actualPanels[side]) return;
+    setPanelWidths((current) => ({
+      ...current,
+      // Keep the other pane at its displayed width while this divider moves.
+      ...(side === "sidebar" ? { detail: actualPanels.detail } : {}),
+      ...(side === "detail" && !sidebarCollapsed
+        ? { sidebar: actualPanels.sidebar }
+        : {}),
+      [side]: value,
+    }));
+  };
+  useEffect(() => {
+    const resize = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", resize);
+    return () => window.removeEventListener("resize", resize);
+  }, []);
+  useEffect(() => {
+    if (panelResizing) return;
+    const timer = window.setTimeout(() => {
+      try {
+        localStorage.setItem(
+          "questionTrail.panelWidths",
+          JSON.stringify(panelWidths),
+        );
+      } catch {
+        /* Width controls remain usable when browser storage is unavailable. */
+      }
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [panelWidths, panelResizing]);
   const [sessionQuery, setSessionQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [zoom, setZoom] = useState(100);
@@ -800,7 +870,13 @@ export default function App() {
 
   return (
     <div
-      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${sidebarOpen ? "sidebar-open" : ""} ${expanded ? "canvas-expanded" : ""}`}
+      className={`app-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${sidebarOpen ? "sidebar-open" : ""} ${expanded ? "canvas-expanded" : ""} ${panelResizing ? "is-panel-resizing" : ""}`}
+      style={
+        {
+          "--qt-sidebar-width": `${actualPanels.sidebar}px`,
+          "--qt-detail-width": `${actualPanels.detail}px`,
+        } as CSSProperties
+      }
     >
       {sidebarOpen && (
         <button
@@ -809,7 +885,11 @@ export default function App() {
           onClick={() => setSidebarOpen(false)}
         />
       )}
-      <aside className="session-sidebar" aria-label="会话列表">
+      <aside
+        id="session-sidebar"
+        className="session-sidebar"
+        aria-label="会话列表"
+      >
         <div className="brand">
           <span className="brand-mark">
             <Route size={23} />
@@ -946,9 +1026,27 @@ export default function App() {
             <PanelLeftClose size={15} />
             收起侧栏
           </button>
-          <span className="version">Codex Navigator 3.2</span>
+          <span className="version">Codex Navigator 3.3</span>
         </div>
       </aside>
+
+      {desktopPanels && !sidebarCollapsed && !expanded && (
+        <PanelResizeHandle
+          side="sidebar"
+          controls="session-sidebar"
+          value={actualPanels.sidebar}
+          {...panelResizeBounds("sidebar", viewportWidth, actualPanels.detail)}
+          onChange={(value) => resizePanel("sidebar", value)}
+          onReset={() =>
+            setPanelWidths((current) => ({
+              ...current,
+              sidebar: PANEL_DEFAULTS.sidebar,
+            }))
+          }
+          onDraggingChange={beginPanelResize}
+          onCancel={cancelPanelResize}
+        />
+      )}
 
       <div className="workspace">
         <header className="topbar">
@@ -1231,6 +1329,7 @@ export default function App() {
                   onFocusPathChange={setFocusPath}
                   onZoomChange={setZoom}
                   layout={layout}
+                  panelResizing={panelResizing}
                   favoriteOnly={favoriteOnly}
                   events={showCompactions ? sessionEvents : []}
                   onToggleFavorite={(node) => {
@@ -1294,6 +1393,27 @@ export default function App() {
               )}
             </div>
           </main>
+          {desktopPanels && !expanded && (
+            <PanelResizeHandle
+              side="detail"
+              controls="detail-panel"
+              value={actualPanels.detail}
+              {...panelResizeBounds(
+                "detail",
+                viewportWidth,
+                actualPanels.sidebar,
+              )}
+              onChange={(value) => resizePanel("detail", value)}
+              onReset={() =>
+                setPanelWidths((current) => ({
+                  ...current,
+                  detail: PANEL_DEFAULTS.detail,
+                }))
+              }
+              onDraggingChange={beginPanelResize}
+              onCancel={cancelPanelResize}
+            />
+          )}
           {!expanded && selectedEvent ? (
             <EventDetail
               event={selectedEvent}
@@ -1449,6 +1569,7 @@ function DetailPanel({
   }
   return (
     <aside
+      id="detail-panel"
       ref={panel}
       tabIndex={-1}
       className={`detail-panel ${node ? "has-selection" : ""}`}
